@@ -1,0 +1,19 @@
+# Virtual environment. uv recreates it from pyproject.toml + uv.lock.
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Local secrets and config. Never commit .env.
+.env
+
+# macOS
+.DS_Store
+
+# Local reference copies, not part of the project
+_ref_portfolio_agent/
+subway-survey-text2sql-improved/
+
+# DuckDB write-ahead log left behind by an interrupted build
+data/*.wal

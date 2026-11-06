@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>County Food &amp; Health Explorer</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f3ec; --paper: #fffdf8; --ink: #1f2a24; --muted: #6b7570; --line: #e3ddd0;
+    --green: #2f6b4f; --green-soft: #e4efe8; --orange: #c2542a; --orange-soft: #fbe9df;
+    --blue: #2b5c8a; --blue-soft: #e3ecf5; --purple: #6b4c9a; --purple-soft: #ece5f5; --bad: #a3321e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; color: var(--ink); background: var(--bg); display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 1.4rem; background: var(--paper); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: 0.01em; }
+  header h1 span { color: var(--green); }
+  header p { font-family: system-ui, -apple-system, sans-serif; font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+  header .actions { display: flex; gap: 0.5rem; }
+  header button { font-family: system-ui, sans-serif; background: none; border: 1px solid var(--line); padding: 0.4rem 0.8rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; border-radius: 4px; }
+  header button:hover { border-color: var(--ink); }
+
+  main { flex: 1; display: grid; grid-template-columns: 290px minmax(0, 1fr) 330px; min-height: 0; }
+  aside { overflow-y: auto; padding: 1.1rem 1.1rem 2rem; font-family: system-ui, -apple-system, sans-serif; font-size: 0.84rem; line-height: 1.5; }
+  #about { border-right: 1px solid var(--line); background: var(--paper); }
+  #session { border-left: 1px solid var(--line); background: var(--paper); }
+  aside h2 { font-family: inherit; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 1.1rem 0 0.45rem; }
+  aside h2:first-child { margin-top: 0; }
+  aside p { color: #39443e; }
+  aside ul { padding-left: 1.1rem; color: #39443e; }
+  aside li { margin: 0.2rem 0; }
+  .chip { display: block; width: 100%; text-align: left; font: inherit; font-size: 0.8rem; background: var(--green-soft); color: var(--ink); border: 1px solid transparent; border-radius: 6px; padding: 0.5rem 0.65rem; margin: 0.35rem 0; cursor: pointer; line-height: 1.35; }
+  .chip:hover { border-color: var(--green); }
+  .chip small { display: block; color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
+  .src { font-size: 0.76rem; color: var(--muted); }
+  .src b { color: #39443e; font-weight: 600; }
+
+  /* Chat */
+  #chat { display: flex; flex-direction: column; min-height: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 1.5rem 2rem; display: flex; flex-direction: column; gap: 1.1rem; }
+  .msg { max-width: 860px; line-height: 1.6; font-size: 1rem; }
+  .msg .who { font-family: system-ui, sans-serif; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.3rem; }
+  .msg.user { align-self: flex-end; background: var(--paper); border: 1px solid var(--line); border-radius: 12px 12px 2px 12px; padding: 0.7rem 1rem; max-width: 70%; }
+  .msg.assistant .content { background: var(--paper); border: 1px solid var(--line); border-radius: 2px 12px 12px 12px; padding: 0.9rem 1.15rem; }
+  .msg.loading .content { color: var(--muted); font-style: italic; }
+  .content p { margin: 0.4rem 0; }
+  .content p:first-child { margin-top: 0; }
+  .content strong:first-child { font-size: 1.05rem; }
+  .content table { border-collapse: collapse; margin: 0.6rem 0; font-family: system-ui, sans-serif; font-size: 0.84rem; }
+  .content th, .content td { border: 1px solid var(--line); padding: 0.3rem 0.6rem; text-align: left; }
+  .content th { background: var(--bg); font-weight: 600; }
+  .content ul, .content ol { padding-left: 1.3rem; margin: 0.3rem 0; }
+  .content h1, .content h2, .content h3 { font-size: 1rem; margin: 0.8rem 0 0.25rem; }
+  .content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; background: var(--bg); padding: 0 0.3em; border-radius: 3px; }
+
+  /* Tool trail */
+  .trail { max-width: 860px; font-family: system-ui, sans-serif; display: flex; flex-direction: column; gap: 0.35rem; }
+  .trail .label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  details.call { border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; background: var(--paper); font-size: 0.78rem; }
+  details.call summary { cursor: pointer; padding: 0.45rem 0.7rem; display: flex; align-items: center; gap: 0.5rem; list-style: none; }
+  details.call summary::-webkit-details-marker { display: none; }
+  details.call .tag { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.4rem; border-radius: 3px; font-weight: 600; }
+  details.call .name { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+  details.call .brief { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  details.call .body { border-top: 1px dashed var(--line); padding: 0.5rem 0.7rem 0.7rem; }
+  details.call pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, monospace; font-size: 0.74rem; line-height: 1.45; max-height: 320px; overflow: auto; background: var(--bg); padding: 0.5rem 0.6rem; border-radius: 4px; margin: 0.25rem 0 0.5rem; }
+  details.call .k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .call.ctx { border-left-color: var(--blue); } .call.ctx .tag { background: var(--blue-soft); color: var(--blue); }
+  .call.sql { border-left-color: var(--green); } .call.sql .tag { background: var(--green-soft); color: var(--green); }
+  .call.calc { border-left-color: var(--purple); } .call.calc .tag { background: var(--purple-soft); color: var(--purple); }
+  .call.ext { border-left-color: var(--orange); } .call.ext .tag { background: var(--orange-soft); color: var(--orange); }
+  .call.err { border-left-color: var(--bad); }
+  .call.err .tag { background: #f8e1dc; color: var(--bad); }
+
+  #composer { display: flex; gap: 0.75rem; padding: 0.9rem 2rem 1.1rem; border-top: 1px solid var(--line); background: var(--paper); }
+  #input { flex: 1; font: inherit; font-size: 1rem; padding: 0.65rem 0.8rem; border: 1px solid var(--line); border-radius: 8px; outline: none; background: #fff; }
+  #input:focus { border-color: var(--green); }
+  #send { font-family: system-ui, sans-serif; padding: 0.65rem 1.3rem; background: var(--green); color: #fff; border: none; border-radius: 8px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; }
+  #send:disabled { opacity: 0.35; cursor: default; }
+
+  /* Session panel */
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.8rem; margin-bottom: 0.6rem; }
+  .card h3 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; }
+  .card .sub { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.4rem; }
+  .empty { color: var(--muted); font-size: 0.8rem; }
+  .bar-row { display: grid; grid-template-columns: 92px 1fr 48px; align-items: center; gap: 0.4rem; font-size: 0.74rem; margin: 0.18rem 0; }
+  .bar-row .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-row .v { text-align: right; font-variant-numeric: tabular-nums; color: #39443e; }
+  .bar { height: 10px; background: var(--green-soft); border-radius: 3px; position: relative; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); border-radius: 3px; }
+  .bar.orange i { background: var(--orange); } .bar.orange { background: var(--orange-soft); }
+  .bar .med { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: 0.6; }
+  .pill { display: inline-block; font-size: 0.66rem; padding: 0.08rem 0.45rem; border-radius: 999px; background: var(--green-soft); color: var(--green); margin: 0 0.15rem 0.15rem 0; }
+  .pill.off { background: #f0ece3; color: var(--muted); }
+  table.mini { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+  table.mini th, table.mini td { padding: 0.25rem 0.3rem; border-bottom: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+  table.mini th:first-child, table.mini td:first-child { text-align: left; }
+  table.mini th { font-weight: 600; color: var(--muted); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .yes { color: var(--green); font-weight: 600; } .no { color: var(--muted); }
+  pre.sql { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, monospace; font-size: 0.7rem; background: var(--bg); padding: 0.45rem 0.55rem; border-radius: 4px; }
+  footer { font-family: system-ui, sans-serif; font-size: 0.7rem; color: var(--muted); padding: 0.45rem 1.4rem; border-top: 1px solid var(--line); background: var(--paper); }
+
+  @media (max-width: 1100px) { main { grid-template-columns: 250px minmax(0, 1fr); } #session { display: none; } }
+  @media (max-width: 760px) {
+    body { height: auto; min-height: 100vh; }
+    main { display: block; }
+    #about { border-right: none; border-bottom: 1px solid var(--line); }
+    #chat { height: 85dvh; }
+    #messages, #composer { padding-left: 1rem; padding-right: 1rem; }
+    .msg.user { max-width: 90%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1><span>County Food &amp; Health</span> Explorer</h1>
+    <p>Text-to-SQL over the USDA Food Environment Atlas and County Health Rankings, cross-checked against live CDC PLACES. Every number traces to a tool call you can open.</p>
+  </div>
+  <div class="actions"><button id="toggle-trail">Hide tool calls</button><button id="new-session">New session</button></div>
+</header>
+
+<main>
+  <aside id="about">
+    <h2>What it explores</h2>
+    <p>Where in a state do <b>limited food access</b>, poverty and food-assistance need coincide with <b>diabetes, obesity and food insecurity</b>, county by county, and does the latest CDC data still show the same places?</p>
+    <h2>Who it is for</h2>
+    <p>State and county health-department analysts deciding where nutrition and chronic-disease programs (SNAP-Ed, produce prescriptions, farmers'-market incentives) should go first.</p>
+    <h2>How to use it</h2>
+    <ul>
+      <li>Name a state and the conditions you care about ("limited access above the state median and diabetes above the median").</li>
+      <li>Say which counties to leave out or keep in; the agent passes them as explicit parameters.</li>
+      <li>Follow up without repeating yourself: the session remembers the state and the selected counties.</li>
+      <li>Ask "does the latest CDC data agree?" to pull PLACES estimates for the selected counties.</li>
+    </ul>
+    <h2>Try one</h2>
+    <button class="chip">In New York State, which counties combine limited access to healthy food with adult diabetes above the state median? Show the top 5 and the thresholds you used.<small>rank_counties · thresholds computed by code</small></button>
+    <button class="chip">How do those counties compare with the rest of the state on poverty rate, food insecurity and uninsured adults? Is the gap real?<small>compare_groups · bootstrap interval</small></button>
+    <button class="chip">Does the latest CDC data still show those counties with high obesity and diabetes?<small>fetch_cdc_places · external, benchmarked to the state</small></button>
+    <button class="chip">How many New York counties have zero supercenters, and what is their median poverty rate?<small>run_sql · a question the data can only half answer</small></button>
+    <h2>Data</h2>
+    <p class="src"><b>USDA ERS Food Environment Atlas</b>, 2025 release (county, 2012-2023) · <b>County Health Rankings 2023</b>, Additional Measures (county, 2014-2022) · <b>CDC PLACES</b> county estimates, 2025 release (2023 data), fetched live.</p>
+    <p class="src" style="margin-top:0.4rem">Cross-sectional county data: it shows where measures co-occur, not what causes what, and nothing below county level.</p>
+  </aside>
+
+  <section id="chat">
+    <div id="messages"></div>
+    <div id="composer">
+      <input id="input" type="text" placeholder="Ask about counties in a state…" autocomplete="off" />
+      <button id="send">Send</button>
+    </div>
+  </section>
+
+  <aside id="session">
+    <h2>Session</h2>
+    <div id="s-state" class="empty">No state yet. Name one in your first question.</div>
+    <h2>Selected counties</h2>
+    <div id="s-selected" class="empty">A ranking will list the counties that meet every criterion.</div>
+    <h2>Comparison</h2>
+    <div id="s-compare" class="empty">Group comparisons appear here.</div>
+    <h2>CDC PLACES cross-check</h2>
+    <div id="s-places" class="empty">Latest CDC estimates for the selected counties appear here.</div>
+    <h2>Last SQL</h2>
+    <div id="s-sql" class="empty">The most recent query the agent ran.</div>
+  </aside>
+</main>
+<footer>Educational analysis tool for program planning, not clinical or policy advice. Atlas and Rankings values are the published county estimates; CDC PLACES values are model-based with confidence intervals.</footer>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const messages = $("messages"), input = $("input"), sendBtn = $("send");
+  let sessionId = null, showTrail = true;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const render = (t) => (window.marked ? marked.parse(t) : esc(t).replace(/\n/g, "<br>"));
+  const pct = (n, d = 1) => (n == null ? "–" : Number(n).toFixed(d) + "%");
+  const num = (n) => (n == null ? "–" : Number(n).toLocaleString("en-US", { maximumFractionDigits: 1 }));
+
+  function addMessage(role, text, loading = false) {
+    const div = document.createElement("div");
+    div.className = "msg " + role + (loading ? " loading" : "");
+    div.innerHTML = `<div class="who">${role === "user" ? "you" : "explorer"}</div><div class="content"></div>`;
+    const c = div.querySelector(".content");
+    if (role === "user") c.textContent = text; else c.innerHTML = loading ? esc(text) : render(text);
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
+  }
+
+  const KIND = { read_mappings: ["ctx", "context"], get_enum_values: ["ctx", "context"], run_sql: ["sql", "sql"], rank_counties: ["calc", "compute"], compare_groups: ["calc", "compute"], fetch_cdc_places: ["ext", "external"] };
+
+  function brief(call, parsed) {
+    if (parsed && parsed.error) return "error: " + parsed.error.kind + " — " + parsed.error.message;
+    const a = call.args || {};
+    if (call.name === "run_sql") return (parsed && parsed.row_count != null ? parsed.row_count + " rows · " : "") + (a.query || "");
+    if (call.name === "read_mappings") return a.table ? "table " + a.table : a.search ? "search “" + a.search + "”" : "overview";
+    if (call.name === "get_enum_values") return a.table + "." + a.column;
+    if (call.name === "rank_counties") return (a.state_name || "stored state") + " · " + (a.criteria || []).map((c) => c.metric).join(" & ") + (a.exclude_counties ? " · excluding " + a.exclude_counties.join(", ") : "") + (parsed && parsed.n_qualifying != null ? " · " + parsed.n_qualifying + " qualify" : "");
+    if (call.name === "compare_groups") return (a.metrics || []).join(", ") + " · " + JSON.stringify(a.group_a || "selected") + " vs " + JSON.stringify(a.group_b || "rest_of_state");
+    if (call.name === "fetch_cdc_places") return (a.measures || ["OBESITY", "DIABETES"]).join(", ") + (parsed && parsed.scope === "whole_state" ? " · every county, ranked" : "") + (parsed && parsed.data_year ? " · " + parsed.data_year + " data" : "");
+    return JSON.stringify(a);
+  }
+
+  function addTrail(calls, before) {
+    if (!calls || !calls.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "trail";
+    wrap.style.display = showTrail ? "" : "none";
+    wrap.innerHTML = `<div class="label">${calls.length} tool call${calls.length > 1 ? "s" : ""} · agent: ${esc(calls[0].agent || "analyst")}</div>`;
+    for (const call of calls) {
+      let parsed = null, pretty = call.result;
+      try { parsed = JSON.parse(call.result); pretty = JSON.stringify(parsed, null, 2); } catch (e) {}
+      const [cls, tag] = KIND[call.name] || ["ctx", "tool"];
+      const d = document.createElement("details");
+      d.className = "call " + cls + (parsed && parsed.error ? " err" : "");
+      const argsHtml = call.name === "run_sql"
+        ? `<div class="k">query</div><pre>${esc(call.args.query || "")}</pre>`
+        : `<div class="k">args</div><pre>${esc(JSON.stringify(call.args, null, 2))}</pre>`;
+      d.innerHTML = `<summary><span class="tag">${parsed && parsed.error ? "error" : tag}</span><span class="name">${esc(call.name)}</span><span class="brief">${esc(brief(call, parsed))}</span></summary>
+        <div class="body">${argsHtml}<div class="k">result</div><pre>${esc(pretty)}</pre></div>`;
+      wrap.appendChild(d);
+    }
+    messages.insertBefore(wrap, before);
+  }
+
+  async function send(text) {
+    text = (text ?? input.value).trim();
+    if (!text) return;
+    input.value = "";
+    sendBtn.disabled = true;
+    addMessage("user", text);
+    const loading = addMessage("assistant", "Reading the schema, writing SQL…", true);
+    try {
+      const res = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text, session_id: sessionId }) });
+      const data = await res.json();
+      sessionId = data.session_id;
+      addTrail(data.tool_calls, loading);
+      loading.querySelector(".content").innerHTML = render(data.response);
+      loading.classList.remove("loading");
+      refreshState();
+    } catch (e) {
+      loading.querySelector(".content").textContent = "Error: " + e.message;
+      loading.classList.remove("loading");
+    }
+    messages.scrollTop = messages.scrollHeight;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+
+  // --- Session panel ---
+  function bars(items, valueOf, labelOf, median, fmt, cls = "") {
+    const vals = items.map(valueOf).filter((v) => v != null);
+    const max = Math.max(...vals, median || 0) || 1;
+    return items.map((it) => {
+      const v = valueOf(it);
+      return `<div class="bar-row"><span class="n" title="${esc(labelOf(it))}">${esc(labelOf(it))}</span><div class="bar ${cls}">${v == null ? "" : `<i style="width:${(100 * v) / max}%"></i>`}${median != null ? `<span class="med" style="left:${(100 * median) / max}%" title="state median ${fmt(median)}"></span>` : ""}</div><span class="v">${fmt(v)}</span></div>`;
+    }).join("");
+  }
+
+  function renderSession(st) {
+    $("s-state").innerHTML = st.state_abbr
+      ? `<div class="card"><h3>${esc(st.state_name)} (${esc(st.state_abbr)})</h3><div class="sub">${st.last_ranking ? st.last_ranking.n_counties_in_state + " counties · " + st.last_ranking.n_qualifying + " qualify" : ""}${st.excluded_fips && st.excluded_fips.length ? " · " + st.excluded_fips.length + " excluded by you" : ""}</div></div>`
+      : `<div class="empty">No state yet. Name one in your first question.</div>`;
+
+    const r = st.last_ranking;
+    if (r && r.selected && r.selected.length) {
+      let html = "";
+      r.criteria.forEach((c, i) => {
+        const fmt = (v) => (v == null ? "–" : c.units === "percent" ? pct(v) : c.units === "dollars" ? "$" + num(v) : num(v));
+        html += `<div class="card"><h3>${esc(c.label)}</h3><div class="sub">${esc(c.rule)} · cutoff ${fmt(c.cutoff)} · line = state median</div>${bars(r.selected, (s) => s.values[c.metric], (s) => s.county_name, c.state_median, fmt, i % 2 ? "orange" : "")}</div>`;
+      });
+      if (r.required_not_qualifying && r.required_not_qualifying.length) html += `<div class="card"><h3>Requested but not qualifying</h3>${r.required_not_qualifying.map((s) => `<div class="sub">${esc(s.reason)}</div>`).join("")}</div>`;
+      if (r.excluded_metrics && r.excluded_metrics.length) html += `<div class="card"><h3>Metrics left out</h3>${r.excluded_metrics.map((m) => `<div class="sub"><b>${esc(m.metric)}</b> — ${esc(m.reason)}</div>`).join("")}</div>`;
+      $("s-selected").innerHTML = html;
+    } else if (st.selected && st.selected.length) {
+      $("s-selected").innerHTML = st.selected.map((s) => `<span class="pill">${esc(s.county_name)}</span>`).join("");
+    }
+
+    const cmp = st.last_comparison;
+    if (cmp && cmp.results) {
+      $("s-compare").innerHTML = `<div class="card"><div class="sub">${esc(cmp.group_a.label)} vs ${esc(cmp.group_b.label)}</div><table class="mini"><tr><th>metric</th><th>A</th><th>B</th><th>diff</th><th>real?</th></tr>` +
+        cmp.results.map((x) => x.error ? `<tr><td colspan="5" class="sub">${esc(x.label)}: ${esc(x.error)}</td></tr>` :
+          `<tr><td title="${esc(x.label)}">${esc(x.label.replace(/\s*\(\d{4}.*\)$/, "").slice(0, 26))}</td><td>${x.units === "percent" ? pct(x.group_a.median) : num(x.group_a.median)}</td><td>${x.units === "percent" ? pct(x.group_b.median) : num(x.group_b.median)}</td><td>${x.median_difference > 0 ? "+" : ""}${num(x.median_difference)}</td><td class="${x.interval_excludes_zero ? "yes" : "no"}">${x.interval_excludes_zero ? "yes" : "no"}</td></tr>`).join("") +
+        `</table><div class="sub" style="margin-top:0.35rem">"real?" = 95% bootstrap interval of the median difference excludes zero.</div></div>`;
+    }
+
+    const p = st.last_places;
+    if (p && p.counties && p.counties.length) {
+      const ms = Object.keys(p.measures);
+      $("s-places").innerHTML = `<div class="card"><div class="sub">CDC PLACES, ${esc(p.data_year)} data · bar = county, line = state median</div>` +
+        ms.map((m) => `<h3 style="margin-top:0.5rem">${esc(p.measures[m])}</h3>${bars(p.counties, (c) => (c.measures[m] || {}).value_pct, (c) => c.county_name, (p.state_benchmark[m] || {}).state_median_pct, (v) => pct(v), "orange")}`).join("") + `</div>`;
+    }
+
+    if (st.last_sql) $("s-sql").innerHTML = `<pre class="sql">${esc(st.last_sql)}</pre>`;
+  }
+
+  async function refreshState() {
+    if (!sessionId) return;
+    try { renderSession(await (await fetch("/state?session_id=" + encodeURIComponent(sessionId))).json()); } catch (e) { /* panels are optional */ }
+  }
+
+  // --- Wiring ---
+  sendBtn.addEventListener("click", () => send());
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  for (const b of document.querySelectorAll(".chip")) b.addEventListener("click", () => send(b.childNodes[0].textContent));
+  $("toggle-trail").addEventListener("click", (e) => {
+    showTrail = !showTrail;
+    e.target.textContent = showTrail ? "Hide tool calls" : "Show tool calls";
+    for (const t of document.querySelectorAll(".trail")) t.style.display = showTrail ? "" : "none";
+  });
+  $("new-session").addEventListener("click", async () => {
+    if (sessionId) await fetch("/clear?session_id=" + encodeURIComponent(sessionId), { method: "POST" });
+    location.reload();
+  });
+
+  addMessage("assistant", "Name a state and what you want to find: for example, counties where limited food access and diabetes are both above the state median. I will look up the columns, compute thresholds in code, and show every query and tool result above the answer. I can also say when the data cannot answer: adult obesity and SNAP participation are state-level in the Atlas, so for those I fetch CDC PLACES.");
+
+  // Cloud Run scales to zero; the first request after idle can take several seconds.
+  async function warmUp() {
+    const status = addMessage("assistant", "Waking up the server…", true);
+    sendBtn.disabled = true;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 30000);
+      const res = await fetch("/health", { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error("status " + res.status);
+      status.remove();
+    } catch (e) {
+      status.querySelector(".content").textContent = "The server did not respond (" + e.message + "). Try reloading the page.";
+      status.classList.remove("loading");
+    }
+    sendBtn.disabled = false;
+    input.focus();
+  }
+  warmUp();
+</script>
+</body>
+</html>

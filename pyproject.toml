@@ -1,0 +1,17 @@
+[project]
+name = "food-health-explorer"
+version = "0.1.0"
+description = "County Food & Health Explorer: a Text2SQL agent over the USDA Food Environment Atlas and County Health Rankings, with CDC PLACES as a live cross-check"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "litellm>=1.50,<1.90",  # 1.108 lazily imports the optional `mcp` package and crashes on the first completion
+    "google-cloud-aiplatform>=1.40.0",
+    "duckdb>=1.1",
+    "requests>=2.31",
+]
+
+[dependency-groups]
+# Only build_db.py needs these: `uv run --group build build_db.py`.
+build = ["openpyxl>=3.1"]
