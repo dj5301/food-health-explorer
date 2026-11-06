@@ -1,5 +1,5 @@
 {
-  "deploy_url": "https://REPLACE-AFTER-FIRST-DEPLOY.run.app",
+  "deploy_url": "https://food-health-explorer-1060383691779.europe-west1.run.app",
   "authors": ["dj2763"],
   "path": "text2sql"
 }

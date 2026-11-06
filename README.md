@@ -2,7 +2,7 @@
 
 **A Text2SQL agent for health-department staff: where in a state do limited food access, poverty and food-assistance need coincide with diabetes, obesity and food insecurity, county by county, and does the latest CDC data still show the same places?**
 
-Live: **https://REPLACE-AFTER-FIRST-DEPLOY.run.app** · Path: `text2sql` · Author: dj2763
+Live: **https://food-health-explorer-1060383691779.europe-west1.run.app** · Source: https://github.com/dj5301/food-health-explorer · Path: `text2sql` · Author: dj2763
 
 ## Why this topic
 
@@ -208,4 +208,9 @@ Environment: `MODEL`, `VERTEX_LOCATION` (default `global`), `VERTEXAI_PROJECT`, 
 
 ## Deployment
 
-GCP Cloud Run, Google Cloud buildpacks from this repository; `Procfile` → `uvicorn app:app --host 0.0.0.0 --port $PORT`. Deployed with `--max-instances 1` (in-memory sessions). Gemini is called through the service account (`roles/aiplatform.user`); `VERTEXAI_PROJECT` is a service environment variable; no credentials are committed. Continuous deployment from `main` via Developer Connect.
+GCP Cloud Run (`europe-west1`), Google Cloud buildpacks from this repository; `Procfile` → `uvicorn app:app --host 0.0.0.0 --port $PORT`. Deployed with `--max-instances 1` (in-memory sessions), 1 GiB memory, startup CPU boost. Gemini is called through the service account (`roles/aiplatform.user`); `VERTEXAI_PROJECT` is a service environment variable; no credentials are committed. Continuous deployment from `main` via Developer Connect, per the course guide.
+
+```bash
+gcloud run deploy food-health-explorer --source . --region europe-west1 --allow-unauthenticated \
+  --max-instances 1 --memory 1Gi --cpu-boost --set-env-vars VERTEXAI_PROJECT=<project-id>
+```
