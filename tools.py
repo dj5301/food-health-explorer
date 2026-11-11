@@ -54,6 +54,7 @@ def new_state() -> dict:
         "state_name": None,
         "selected_fips": [],
         "selected_names": [],
+        "selected_state": None,  # the state the selection was made in; a selection never carries over to another state
         "excluded_fips": [],
         "last_sql": None,
         "last_ranking": None,
@@ -87,7 +88,7 @@ def resolve_state(value, state: dict) -> tuple[str, str]:
     if value is None or str(value).strip() == "":
         if state["state_abbr"]:
             return state["state_abbr"], state["state_name"]
-        raise ValueError("No state is stored in this session yet. Pass `state` (name or two-letter abbreviation).")
+        raise ValueError("No state is stored in this session yet. Pass `state_name` (full name or two-letter abbreviation).")
     key = str(value).strip().lower()
     if key not in STATES:
         raise ValueError(f"Unknown state '{value}'. Use a full name or USPS abbreviation; call get_enum_values('counties', 'state_abbr') for the list.")
@@ -158,14 +159,34 @@ def _metric_info(table: str, column: str, meta: dict) -> dict:
     }
 
 
-def _county_rows(state_abbr: str, metrics: list[tuple[str, str]]) -> list[dict]:
-    """Every county in the state with the requested metrics, keyed by 'table.column'."""
+# Connecticut replaced its 8 counties with 9 planning regions in 2022. The Atlas workbook lists both, but every
+# measure in both sources is published for the 8 historical counties only: the regions are rows with no values.
+# Counting them would report "17 counties" and put 9 empty units in every benchmark.
+CT_PLANNING_REGIONS = {f"09{n}0" for n in range(11, 20)}
+CT_NOTE = (
+    "Connecticut is analysed as its 8 historical counties. The 9 planning regions that replaced them in 2022 are listed in the "
+    "Atlas but carry no values in the Atlas or County Health Rankings, so they are left out of counts, medians and rankings."
+)
+
+
+CT_PLACES_NOTE = (
+    "CDC PLACES publishes Connecticut by its 9 planning regions, while the Atlas and County Health Rankings use the 8 historical "
+    "counties. The two geographies do not match one-to-one, so a Connecticut county from a ranking has no PLACES value and a "
+    "PLACES region cannot be checked against the local tables."
+)
+
+
+def _county_rows(state_abbr: str, metrics: list[tuple[str, str]], keep_empty_regions: bool = False) -> list[dict]:
+    """Every county in the state with the requested metrics, keyed by 'table.column'.
+
+    keep_empty_regions: CDC PLACES may publish Connecticut by planning region, so the external tool asks for both sets.
+    """
     tables = sorted({t for t, _ in metrics})
     select = ["c.fips", "c.county_name", "c.population_2021 AS population", "c.metro23 AS metro"]
     select += [f'"{t}"."{c}" AS "{t}.{c}"' for t, c in metrics]
     joins = " ".join(f'LEFT JOIN "{t}" USING (fips)' for t in tables)
     cols, rows = _query(f"SELECT {', '.join(select)} FROM counties c {joins} WHERE c.state_abbr = ? AND c.state_name IS NOT NULL ORDER BY c.county_name", [state_abbr])
-    return [dict(zip(cols, r)) for r in rows]
+    return [dict(zip(cols, r)) for r in rows if keep_empty_regions or r[0] not in CT_PLANNING_REGIONS]
 
 
 def _resolve_metrics(refs: list) -> tuple[list[tuple[str, str]], dict, list[dict]]:
@@ -325,14 +346,46 @@ def rank_counties(state: dict, criteria: list, state_name: str | None = None, ex
     result["excluded_metrics"] = excluded_metrics
     if excluded_metrics:
         result["warnings"].append("Some requested metrics were left out of the criteria; see excluded_metrics for why and what to use instead.")
+    if abbr == "CT":
+        result["warnings"].append(CT_NOTE)
 
     # Remember the facts the user established, for follow-ups.
     state["state_abbr"], state["state_name"] = abbr, full
     state["selected_fips"] = [s["fips"] for s in result["selected"]]
     state["selected_names"] = [s["county_name"] for s in result["selected"]]
+    state["selected_state"] = abbr
     state["excluded_fips"] = exclude_fips
     state["last_ranking"] = {k: v for k, v in result.items() if k != "counties_missing_data"} | {"n_missing": len(result["counties_missing_data"])}
     result["session_note"] = f"Stored for follow-ups: state {abbr}, {len(state['selected_fips'])} selected counties, {len(exclude_fips)} exclusions. Later calls may omit state/counties to reuse them."
+    return json.dumps(result, default=str)
+
+
+# --- Tool: profile_counties ---
+
+
+def profile_counties(state: dict, counties: list, metrics: list, state_name: str | None = None) -> str:
+    try:
+        abbr, full = resolve_state(state_name, state)
+        if not isinstance(counties, list) or not counties:
+            raise ValueError("counties must be a non-empty list of county names or fips, e.g. ['Kings', 'Holmes'].")
+        usable, info, excluded_metrics = _resolve_metrics(metrics)
+        if not usable:
+            return _err("no_usable_metric", "None of the requested metrics exists at county level.", excluded_metrics=excluded_metrics)
+        rows = _county_rows(abbr, usable)
+        fips, bad = analysis.match_counties(counties, rows)
+        if not fips:
+            raise ValueError(f"Could not match {bad} to counties in {full}. county_name has no 'County' suffix; New York City boroughs are Bronx, Kings (Brooklyn), New York (Manhattan), Queens, Richmond (Staten Island).")
+        result = analysis.profile_counties(rows, fips, [f"{t}.{c}" for t, c in usable], info, full)
+    except ValueError as e:
+        return _err("invalid_argument", str(e))
+    result["excluded_metrics"] = excluded_metrics
+    result["warnings"] = [f"Could not match '{name}' to a county in {full}; it was left out." for name in bad]
+    if excluded_metrics:
+        result["warnings"].append("Some requested metrics were left out; see excluded_metrics for why and what to use instead.")
+    if abbr == "CT":
+        result["warnings"].append(CT_NOTE)
+    state["state_abbr"], state["state_name"] = abbr, full
+    result["session_note"] = "The session's selected counties are unchanged: this is a lookup, not a ranking."
     return json.dumps(result, default=str)
 
 
@@ -341,16 +394,18 @@ def rank_counties(state: dict, criteria: list, state_name: str | None = None, ex
 GROUP_KEYWORDS = ("selected", "rest_of_state", "metro", "nonmetro", "all_state")
 
 
-def _group(spec, rows: list[dict], state: dict, other: set[str] | None = None) -> tuple[list[dict], str, list[str]]:
+def _group(spec, rows: list[dict], state: dict, other: set[str] | None = None, abbr: str | None = None) -> tuple[list[dict], str, list[str]]:
     """Resolve a group spec to (rows, label, unmatched_names)."""
     by_fips = {r["fips"]: r for r in rows}
     if spec is None:
         spec = "selected"
     if isinstance(spec, str):
-        key = spec.strip().lower()
+        key = spec.strip().strip("\"'").lower()  # models sometimes send the keyword with its quotes: '"selected"'
         if key == "selected":
             if not state["selected_fips"]:
                 raise ValueError("No counties are selected yet: run rank_counties first or pass {\"counties\": [...]} explicitly.")
+            if abbr and state.get("selected_state") and abbr != state["selected_state"]:
+                raise ValueError(f"The selected counties are in {state['selected_state']}, not {abbr}. Run rank_counties for {abbr} first, or pass {{\"counties\": [...]}} explicitly.")
             picked = [by_fips[f] for f in state["selected_fips"] if f in by_fips]
             return picked, f"the {len(picked)} selected counties", []
         if key == "rest_of_state":
@@ -379,8 +434,8 @@ def compare_groups(state: dict, metrics: list, group_a=None, group_b="rest_of_st
         if not usable:
             return _err("no_usable_metric", "None of the requested metrics can be compared across counties.", excluded_metrics=excluded_metrics)
         rows = _county_rows(abbr, usable)
-        a_rows, label_a, bad_a = _group(group_a, rows, state)
-        b_rows, label_b, bad_b = _group(group_b, rows, state, other={r["fips"] for r in a_rows})
+        a_rows, label_a, bad_a = _group(group_a, rows, state, abbr=abbr)
+        b_rows, label_b, bad_b = _group(group_b, rows, state, other={r["fips"] for r in a_rows}, abbr=abbr)
         result = analysis.compare_groups(a_rows, b_rows, [f"{t}.{c}" for t, c in usable], info, label_a, label_b)
     except ValueError as e:
         return _err("invalid_argument", str(e))
@@ -388,6 +443,8 @@ def compare_groups(state: dict, metrics: list, group_a=None, group_b="rest_of_st
     result["excluded_metrics"] = excluded_metrics
     for name in bad_a + bad_b:
         result["warnings"].append(f"Could not match '{name}' to a county in {full}; it was left out of its group.")
+    if abbr == "CT":
+        result["warnings"].append(CT_NOTE)
     state["state_abbr"], state["state_name"] = abbr, full
     state["last_comparison"] = result
     return json.dumps(result, default=str)
@@ -396,9 +453,10 @@ def compare_groups(state: dict, metrics: list, group_a=None, group_b="rest_of_st
 # --- Tool: fetch_cdc_places (external) ---
 
 
-def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | None = None, counties: list | None = None, state_name: str | None = None, value_type: str = "AgeAdjPrv", benchmark_state: bool = True, scope: str = "auto", top_n: int = 10) -> str:
+def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | None = None, counties: list | None = None, state_name: str | None = None, value_type: str = "AgeAdjPrv", benchmark_state: bool = True, scope: str = "auto", top_n: int = 10, exclude_counties: list | None = None) -> str:
     measures = measures or ["OBESITY", "DIABETES"]
     whole_state = False
+    exclude_fips: list[str] = []
     try:
         abbr, full = (resolve_state(state_name, state) if (state_name or state["state_abbr"]) else (None, None))
         if scope not in {"auto", "selected", "whole_state"}:
@@ -407,20 +465,29 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
             targets = [str(f).zfill(5) for f in fips]
         elif counties:
             if not abbr:
-                raise ValueError("Pass `state` so county names can be resolved.")
-            all_rows = _county_rows(abbr, [])
+                raise ValueError("Pass `state_name` so county names can be resolved.")
+            all_rows = _county_rows(abbr, [], keep_empty_regions=True)
             targets, bad = analysis.match_counties(counties, all_rows)
             if bad:
                 raise ValueError(f"Could not match {bad} to counties in {full}.")
-        elif scope != "whole_state" and state["selected_fips"]:
+        elif scope == "selected" and abbr and state["selected_fips"] and abbr != state.get("selected_state"):
+            raise ValueError(f"The selected counties are in {state.get('selected_state')}, not {abbr}. Run rank_counties for {abbr} first, pass `counties`, or use scope 'whole_state'.")
+        elif scope != "whole_state" and state["selected_fips"] and (not abbr or abbr == state.get("selected_state")):
+            # A selection made in one state is never benchmarked against another state's median.
             targets = list(state["selected_fips"])
         elif abbr:
             whole_state = True  # every county in the state, ranked by the first measure
-            targets = [r["fips"] for r in _county_rows(abbr, [])]
+            targets = [r["fips"] for r in _county_rows(abbr, [], keep_empty_regions=True)]
         else:
-            raise ValueError("No counties given and no state known. Pass `state` (for every county in it), `fips`/`counties`, or run rank_counties first.")
+            raise ValueError("No counties given and no state known. Pass `state_name` (for every county in it), `fips`/`counties`, or run rank_counties first.")
         if not 1 <= int(top_n) <= 100:
             raise ValueError("top_n must be between 1 and 100.")
+        if exclude_counties:
+            if not abbr:
+                raise ValueError("Pass `state_name` so the counties to exclude can be resolved.")
+            exclude_fips, bad = analysis.match_counties(exclude_counties, _county_rows(abbr, [], keep_empty_regions=True))
+            if bad:
+                raise ValueError(f"Could not match {bad} to counties in {full}; nothing was excluded.")
         if whole_state:
             data = None
             for i in range(0, len(targets), MAX_PLACES_FIPS):
@@ -444,7 +511,7 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
     benchmark, bench_note = {}, None
     if benchmark_state and abbr:
         try:
-            state_fips = [r["fips"] for r in _county_rows(abbr, [])]
+            state_fips = [r["fips"] for r in _county_rows(abbr, [], keep_empty_regions=True)]
             pooled: dict[str, list[float]] = {m: [] for m in data["measures"]}
             chunks = [data] if whole_state else [fetch_places(state_fips[i : i + MAX_PLACES_FIPS], list(data["measures"]), value_type) for i in range(0, len(state_fips), MAX_PLACES_FIPS)]
             for chunk in chunks:
@@ -455,7 +522,7 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
             for m, vals in pooled.items():
                 if vals:
                     benchmark[m] = {"state_median_pct": round(median(vals), 2), "state_min_pct": min(vals), "state_max_pct": max(vals), "n_counties": len(vals)}
-            bench_note = f"Benchmark = all {len(state_fips)} counties in {full} from the same PLACES release."
+            bench_note = f"Benchmark = the {max((len(v) for v in pooled.values()), default=0)} counties in {full} with a value in the same PLACES release."
         except PlacesError as e:
             bench_note = f"State benchmark unavailable ({e.kind}: {e})."
 
@@ -473,6 +540,9 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
             measures_out[m] = item
         out_counties.append({"fips": f, "county_name": names.get(f, (entry["county_name"], entry["state_abbr"]))[0], "state_abbr": names.get(f, (None, entry["state_abbr"]))[1], "population": entry["population"], "measures": measures_out})
 
+    # Excluded counties leave the list the user sees but stay in the state benchmark, as in rank_counties.
+    excluded_names = sorted(c["county_name"] for c in out_counties if c["fips"] in exclude_fips)
+    out_counties = [c for c in out_counties if c["fips"] not in exclude_fips]
     sentences, ranking_note = [], None
     first = list(data["measures"])[0]
     if whole_state:
@@ -501,6 +571,11 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
         "state_benchmark": benchmark,
         "benchmark_note": bench_note,
         "summary": sentences,
+        "warnings": ([f"Excluded at the user's request (still part of the state median): {', '.join(excluded_names)}."] if excluded_names else []),
+    }
+    if abbr == "CT":
+        result["warnings"].append(CT_PLACES_NOTE)
+    result |= {
         "note": "These are CDC model-based survey estimates for a later year than the Atlas/Rankings tables. They are a cross-check and do NOT replace the local values used in rankings; the session's selected counties are unchanged.",
     }
     state["last_places"] = {k: result[k] for k in ("data_year", "measures", "counties", "state_benchmark")}
@@ -545,7 +620,7 @@ TOOLS = [
             "criteria": {"type": "array", "description": "One entry per condition.", "items": {"type": "object", "properties": {
                 "metric": {"type": "string", "description": _METRIC_DESC},
                 "direction": {"type": "string", "enum": list(analysis.DIRECTIONS), "description": "'high' = the county's value must be high (default); 'low' = must be low."},
-                "threshold": {"type": "object", "description": "How high/low. Default {type: 'state_median'}. {type: 'percentile', value: 75} = top quarter (or bottom quarter for direction 'low'). {type: 'value', value: 10} = at or above/below 10 in the metric's units.", "properties": {
+                "threshold": {"type": "object", "description": "How high/low. For a plain 'top N / highest / lowest counties on a metric' with no condition use {type: 'none'}: no cutoff, every county with a value is ranked. Default {type: 'state_median'}. {type: 'percentile', value: 75} = top quarter (or bottom quarter for direction 'low'). {type: 'value', value: 10} = at or above/below 10 in the metric's units.", "properties": {
                     "type": {"type": "string", "enum": list(analysis.THRESHOLD_TYPES)},
                     "value": {"type": "number"},
                 }},
@@ -555,6 +630,15 @@ TOOLS = [
             "require_counties": {"type": "array", "items": {"type": "string"}, "description": "Counties the user wants to see regardless (names or fips). They appear in the result with their values; if they do not qualify, the result explains which criterion they miss."},
             "top_n": {"type": "integer", "description": "How many qualifying counties to return (1-100, default 10)."},
         }, "required": ["criteria"]},
+    }},
+    {"type": "function", "function": {
+        "name": "profile_counties",
+        "description": "Look up NAMED counties: for each county and metric, the published value, the state county median, the county's rank and percentile within the state, and a ready-made `sentence`. Use whenever the user asks about one or a few specific counties ('how does Kings County do on food access', 'what about Holmes', a city or borough that maps to a county, the side-by-side after declining a funding question). Use this instead of run_sql for such lookups, and repeat the `sentence`: it states the value as published, so do not judge whether it looks high, low or wrong. Does not change the session's selected counties.",
+        "parameters": {"type": "object", "properties": {
+            "counties": {"type": "array", "items": {"type": "string"}, "description": "County names (no 'County' suffix) or fips, e.g. ['Kings'] for Brooklyn."},
+            "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metrics to report, each as 'table.column'. State-level columns are left out with an explanation."},
+            "state_name": _STATE_PARAM,
+        }, "required": ["counties", "metrics"]},
     }},
     {"type": "function", "function": {
         "name": "compare_groups",
@@ -578,6 +662,7 @@ TOOLS = [
             "state_name": _STATE_PARAM,
             "value_type": {"type": "string", "enum": list(VALUE_TYPES), "description": "AgeAdjPrv (age-adjusted, default; comparable across counties) or CrdPrv (crude)."},
             "benchmark_state": {"type": "boolean", "description": "Also fetch every county in the state to compute the state median (default true)."},
+            "exclude_counties": {"type": "array", "items": {"type": "string"}, "description": "Counties the user wants left out of the returned list or ranking (names or fips), e.g. ['St. Lawrence'] for 'redo that without St. Lawrence'. They still count toward the state median; the result says so. Use this instead of fetching more rows and dropping counties yourself."},
         }, "required": []},
     }},
 ]
@@ -588,6 +673,7 @@ TOOL_MAP = {
     "run_sql": run_sql,
     "rank_counties": rank_counties,
     "compare_groups": compare_groups,
+    "profile_counties": profile_counties,
     "fetch_cdc_places": fetch_cdc_places,
 }
 

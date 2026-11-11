@@ -13,7 +13,7 @@ from difflib import get_close_matches
 from statistics import median
 
 DIRECTIONS = ("high", "low")
-THRESHOLD_TYPES = ("state_median", "percentile", "value")
+THRESHOLD_TYPES = ("state_median", "percentile", "value", "none")
 BOOTSTRAP_REPS = 2000
 BOOTSTRAP_SEED = 4570  # fixed: the same question must give the same interval
 MIN_GROUP_SIZE = 3
@@ -21,7 +21,7 @@ CRITERION_KEYS = {"metric", "direction", "threshold"}
 # Appended to every criteria error: a model that sees the right shape fixes its call in one round.
 CRITERION_EXAMPLE = (
     'Expected shape: {"metric": "food_access.pct_laccess_lowi19", "direction": "high", "threshold": {"type": "state_median"}}; '
-    'other thresholds: {"type": "percentile", "value": 75} or {"type": "value", "value": 10}.'
+    'other thresholds: {"type": "percentile", "value": 75}, {"type": "value", "value": 10}, or {"type": "none"} for a plain highest/lowest-N ranking with no cutoff.'
 )
 
 
@@ -94,6 +94,8 @@ def fmt(value, units: str = "") -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "n/a"
     if units == "percent":
+        if 0 < abs(value) < 0.05:
+            return "less than 0.1%"  # a real but tiny share (Kings County, NY: 41 residents); "0.0%" would read as none
         return f"{value:.1f}%"
     if units == "dollars":
         return f"${value:,.0f}"
@@ -179,13 +181,18 @@ def rank_counties(
             q = float(t["value"]) / 100
             cutoff = quantile(values, q if c["direction"] == "high" else 1 - q)
             rule = f"in the {'top' if c['direction'] == 'high' else 'bottom'} {100 - float(t['value']):g}% of {state_label} counties"
+        elif t["type"] == "none":
+            # A plain "highest N" question: every county with a value is a candidate, the order does the work.
+            cutoff, rule = None, f"no cutoff: all {state_label} counties with a value, ranked {'highest' if c['direction'] == 'high' else 'lowest'} first"
         else:
             cutoff, rule = float(t["value"]), f"{'at or above' if c['direction'] == 'high' else 'at or below'} {fmt(float(t['value']), metrics_info[m]['units'])}"
-        resolved.append({**c, "label": metrics_info[m]["label"], "units": metrics_info[m]["units"], "cutoff": round(cutoff, 4), "rule": rule, "state_median": round(median(values), 4), "n_with_data": len(values), "_values": values})
+        resolved.append({**c, "label": metrics_info[m]["label"], "units": metrics_info[m]["units"], "source": metrics_info[m].get("source"), "cutoff": None if cutoff is None else round(cutoff, 4), "rule": rule, "state_median": round(median(values), 4), "n_with_data": len(values), "_values": values})
 
     def meets(value, c) -> bool | None:
         if value is None:
             return None
+        if c["threshold"]["type"] == "none":
+            return True
         if c["threshold"]["type"] == "state_median":
             return value > c["cutoff"] if c["direction"] == "high" else value < c["cutoff"]
         return value >= c["cutoff"] if c["direction"] == "high" else value <= c["cutoff"]
@@ -247,6 +254,11 @@ def rank_counties(
         warnings.append(f"{len(missing)} counties lack data for at least one metric and cannot qualify; see counties_missing_data.")
     if len(qualifying) > len(selected):
         warnings.append(f"{len(qualifying)} counties qualify; showing the top {len(selected)} by average percentile. Raise top_n to see more.")
+    if len(qualifying) < int(top_n) and any(c["threshold"]["type"] == "state_median" for c in resolved):
+        warnings.append(
+            f"Only {len(qualifying)} of {len(rows)} counties pass the state-median cutoff, fewer than the {int(top_n)} requested. "
+            "If the user asked for a plain 'highest/lowest N' with no condition, call again with threshold {\"type\": \"none\"}."
+        )
     if not qualifying:
         warnings.append("No county meets every criterion. Loosen a threshold or drop a criterion.")
 
@@ -265,6 +277,55 @@ def rank_counties(
         "caveats": [
             "Cross-sectional county data: it shows where measures co-occur, not that one causes another.",
             "Measures come from different years (see criteria[].label); treat small differences as noise.",
+        ],
+    }
+
+
+# --- Tool: profile named counties ---
+
+
+def profile_counties(rows: list[dict], fips: list[str], metrics: list[str], metrics_info: dict, state_label: str) -> dict:
+    """Where each named county stands in its state on each metric: value, state median, rank and percentile.
+
+    The sentence is written here so the model reports a published value as published, however small or large it looks.
+    """
+    if not fips:
+        raise ValueError("Name at least one county.")
+    by_fips = {r["fips"]: r for r in rows}
+    out = []
+    for f in fips:
+        r = by_fips[f]
+        items = []
+        for m in metrics:
+            info = metrics_info[m]
+            u = info["units"]
+            values = sorted(_present([x.get(m) for x in rows]))
+            v = r.get(m)
+            if v is None or not values:
+                items.append({"metric": m, "label": info["label"], "units": u, "value": None,
+                              "sentence": f"{info['label']}: no value is published for {r['county_name']}."})
+                continue
+            med = median(values)
+            rank = 1 + sum(1 for x in values if x > v)
+            pct = percentile_of(v, values, "high")
+            side = "above" if v > med else ("below" if v < med else "equal to")
+            items.append({
+                "metric": m, "label": info["label"], "units": u, "year": info.get("year"), "source": info.get("source"),
+                "value": v, "value_text": fmt(v, u), "state_median": round(med, 4), "state_median_text": fmt(med, u),
+                "vs_median": side, "rank_high_to_low": rank, "n_counties_with_data": len(values), "percentile": round(pct, 1),
+                "sentence": (
+                    f"{info['label']}: {r['county_name']} is {fmt(v, u)}, {side} the {state_label} county median of {fmt(med, u)}; "
+                    f"it ranks {ordinal(rank)} highest of {len(values)} counties with data (at or above {pct:.0f}% of them). "
+                    "This is the value as published in the source table."
+                ),
+            })
+        out.append({"fips": f, "county_name": r["county_name"], "population": r.get("population"), "metrics": items})
+    return {
+        "state": state_label,
+        "n_counties_in_state": len(rows),
+        "counties": out,
+        "caveats": [
+            "Published county estimates from different years; a county's standing on one measure says nothing about causes or about places inside the county.",
         ],
     }
 
@@ -315,7 +376,7 @@ def compare_groups(group_a: list[dict], group_b: list[dict], metrics: list[str],
         if dropped:
             sentence += f" {dropped} counties without data were left out of this metric."
         results.append({
-            "metric": m, "label": info["label"], "units": u, "year": info.get("year"),
+            "metric": m, "label": info["label"], "units": u, "year": info.get("year"), "source": info.get("source"),
             "group_a": {"label": label_a, "n": len(a), "median": round(med_a, 3), "mean": round(sum(a) / len(a), 3), "min": min(a), "max": max(a)},
             "group_b": {"label": label_b, "n": len(b), "median": round(med_b, 3), "mean": round(sum(b) / len(b), 3), "min": min(b), "max": max(b)},
             "median_difference": round(diff, 3),
@@ -330,6 +391,12 @@ def compare_groups(group_a: list[dict], group_b: list[dict], metrics: list[str],
         "group_a": {"label": label_a, "n_counties": len(group_a)},
         "group_b": {"label": label_b, "n_counties": len(group_b)},
         "method": f"Medians compared; 95% interval from {BOOTSTRAP_REPS} seeded bootstrap resamples of the median difference (seed {BOOTSTRAP_SEED}, reproducible).",
+        "interpretation": (
+            "Report each metric as 'interval excludes zero' or 'interval includes zero'. An interval that includes zero means these "
+            "counties cannot distinguish the gap from chance; it does NOT show that there is no gap. The interval resamples counties only: "
+            "it leaves out the sampling and model error inside each county's own published estimate, so it understates the full uncertainty. "
+            "Differences between percentages are in percentage points, not percent."
+        ),
         "results": results,
         "warnings": warnings,
         "caveats": [

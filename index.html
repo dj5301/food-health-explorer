@@ -139,7 +139,7 @@
     <button class="chip">In New York State, which counties combine limited access to healthy food with adult diabetes above the state median? Show the top 5 and the thresholds you used.<small>rank_counties · thresholds computed by code</small></button>
     <button class="chip">How do those counties compare with the rest of the state on poverty rate, food insecurity and uninsured adults? Is the gap real?<small>compare_groups · bootstrap interval</small></button>
     <button class="chip">Does the latest CDC data still show those counties with high obesity and diabetes?<small>fetch_cdc_places · external, benchmarked to the state</small></button>
-    <button class="chip">How many New York counties have zero supercenters, and what is their median poverty rate?<small>run_sql · a question the data can only half answer</small></button>
+    <button class="chip">How many New York counties had zero supercenters in 2020, and what is their median poverty rate?<small>run_sql · a question the data can only half answer</small></button>
     <h2>Data</h2>
     <p class="src"><b>USDA ERS Food Environment Atlas</b>, 2025 release (county, 2012-2023) · <b>County Health Rankings 2023</b>, Additional Measures (county, 2014-2022) · <b>CDC PLACES</b> county estimates, 2025 release (2023 data), fetched live.</p>
     <p class="src" style="margin-top:0.4rem">Cross-sectional county data: it shows where measures co-occur, not what causes what, and nothing below county level.</p>
@@ -189,7 +189,7 @@
     return div;
   }
 
-  const KIND = { read_mappings: ["ctx", "context"], get_enum_values: ["ctx", "context"], run_sql: ["sql", "sql"], rank_counties: ["calc", "compute"], compare_groups: ["calc", "compute"], fetch_cdc_places: ["ext", "external"] };
+  const KIND = { read_mappings: ["ctx", "context"], get_enum_values: ["ctx", "context"], run_sql: ["sql", "sql"], rank_counties: ["calc", "compute"], compare_groups: ["calc", "compute"], profile_counties: ["calc", "compute"], fetch_cdc_places: ["ext", "external"] };
 
   function brief(call, parsed) {
     if (parsed && parsed.error) return "error: " + parsed.error.kind + " — " + parsed.error.message;
@@ -198,6 +198,7 @@
     if (call.name === "read_mappings") return a.table ? "table " + a.table : a.search ? "search “" + a.search + "”" : "overview";
     if (call.name === "get_enum_values") return a.table + "." + a.column;
     if (call.name === "rank_counties") return (a.state_name || "stored state") + " · " + (a.criteria || []).map((c) => c.metric).join(" & ") + (a.exclude_counties ? " · excluding " + a.exclude_counties.join(", ") : "") + (parsed && parsed.n_qualifying != null ? " · " + parsed.n_qualifying + " qualify" : "");
+    if (call.name === "profile_counties") return (a.counties || []).join(", ") + " · " + (a.metrics || []).join(", ");
     if (call.name === "compare_groups") return (a.metrics || []).join(", ") + " · " + JSON.stringify(a.group_a || "selected") + " vs " + JSON.stringify(a.group_b || "rest_of_state");
     if (call.name === "fetch_cdc_places") return (a.measures || ["OBESITY", "DIABETES"]).join(", ") + (parsed && parsed.scope === "whole_state" ? " · every county, ranked" : "") + (parsed && parsed.data_year ? " · " + parsed.data_year + " data" : "");
     return JSON.stringify(a);
@@ -269,7 +270,7 @@
       let html = "";
       r.criteria.forEach((c, i) => {
         const fmt = (v) => (v == null ? "–" : c.units === "percent" ? pct(v) : c.units === "dollars" ? "$" + num(v) : num(v));
-        html += `<div class="card"><h3>${esc(c.label)}</h3><div class="sub">${esc(c.rule)} · cutoff ${fmt(c.cutoff)} · line = state median</div>${bars(r.selected, (s) => s.values[c.metric], (s) => s.county_name, c.state_median, fmt, i % 2 ? "orange" : "")}</div>`;
+        html += `<div class="card"><h3>${esc(c.label)}</h3><div class="sub">${esc(c.rule)}${c.cutoff == null ? "" : " · cutoff " + fmt(c.cutoff)} · line = state median</div>${bars(r.selected, (s) => s.values[c.metric], (s) => s.county_name, c.state_median, fmt, i % 2 ? "orange" : "")}</div>`;
       });
       if (r.required_not_qualifying && r.required_not_qualifying.length) html += `<div class="card"><h3>Requested but not qualifying</h3>${r.required_not_qualifying.map((s) => `<div class="sub">${esc(s.reason)}</div>`).join("")}</div>`;
       if (r.excluded_metrics && r.excluded_metrics.length) html += `<div class="card"><h3>Metrics left out</h3>${r.excluded_metrics.map((m) => `<div class="sub"><b>${esc(m.metric)}</b> — ${esc(m.reason)}</div>`).join("")}</div>`;
@@ -280,10 +281,10 @@
 
     const cmp = st.last_comparison;
     if (cmp && cmp.results) {
-      $("s-compare").innerHTML = `<div class="card"><div class="sub">${esc(cmp.group_a.label)} vs ${esc(cmp.group_b.label)}</div><table class="mini"><tr><th>metric</th><th>A</th><th>B</th><th>diff</th><th>real?</th></tr>` +
+      $("s-compare").innerHTML = `<div class="card"><div class="sub">${esc(cmp.group_a.label)} vs ${esc(cmp.group_b.label)}</div><table class="mini"><tr><th>metric</th><th>A</th><th>B</th><th>diff</th><th>excl. 0?</th></tr>` +
         cmp.results.map((x) => x.error ? `<tr><td colspan="5" class="sub">${esc(x.label)}: ${esc(x.error)}</td></tr>` :
-          `<tr><td title="${esc(x.label)}">${esc(x.label.replace(/\s*\(\d{4}.*\)$/, "").slice(0, 26))}</td><td>${x.units === "percent" ? pct(x.group_a.median) : num(x.group_a.median)}</td><td>${x.units === "percent" ? pct(x.group_b.median) : num(x.group_b.median)}</td><td>${x.median_difference > 0 ? "+" : ""}${num(x.median_difference)}</td><td class="${x.interval_excludes_zero ? "yes" : "no"}">${x.interval_excludes_zero ? "yes" : "no"}</td></tr>`).join("") +
-        `</table><div class="sub" style="margin-top:0.35rem">"real?" = 95% bootstrap interval of the median difference excludes zero.</div></div>`;
+          `<tr><td title="${esc(x.label)}">${esc(x.label.replace(/\s*\(\d{4}.*\)$/, "").slice(0, 26))}</td><td>${x.units === "percent" ? pct(x.group_a.median) : num(x.group_a.median)}</td><td>${x.units === "percent" ? pct(x.group_b.median) : num(x.group_b.median)}</td><td>${x.median_difference > 0 ? "+" : ""}${num(x.median_difference)}${x.units === "percent" ? " pp" : ""}</td><td class="${x.interval_excludes_zero ? "yes" : "no"}">${x.interval_excludes_zero ? "yes" : "no"}</td></tr>`).join("") +
+        `</table><div class="sub" style="margin-top:0.35rem">"excl. 0?" = the 95% bootstrap interval of the median difference excludes zero. "no" means the gap cannot be told apart from chance, not that there is none. pp = percentage points.</div></div>`;
     }
 
     const p = st.last_places;
