@@ -162,7 +162,7 @@ A third case worth knowing: asked how many New York counties had *zero* supercen
 
 ## Interface and agent architecture
 
-- **Backend** (`app.py`): FastAPI + LiteLLM, the course starter's bounded tool loop (`MAX_TOOL_ROUNDS = 10`, temperature 0.2, short backoff on Vertex 429). Model from `MODEL` (default `vertex_ai/gemini-2.5-flash`; any Ollama tool-calling model works). Single agent; every tool call carries `"agent": "analyst"`.
+- **Backend** (`app.py`): FastAPI + LiteLLM, the course starter's bounded tool loop (`MAX_TOOL_ROUNDS = 10`, temperature 0.2, short backoff on Vertex 429). Model from `MODEL` through LiteLLM: Claude API (`anthropic/claude-sonnet-5-5`), local Ollama (`ollama_chat/gpt-oss:20b`, the only local model supported), or Vertex AI (`vertex_ai/gemini-2.5-flash`, the default and what is currently deployed). Single agent; every tool call carries `"agent": "analyst"`.
 - **Harness guards** (code, one retry each): figures in the draft must appear in the user's message or a tool result (dollar, percent and percentage-point values, including ×100 rescaling) or the draft is discarded and the model told to call a tool; a data question answered with no successful data tool, or after every data tool errored, is sent back (the model once invented a 31-county list after a failed query); verbatim repeats and empty replies are retried; after a data tool runs the answer must open with one bold sentence; a funding/policy question must contain the one-sentence decline.
 - **Frontend** (`index.html`, written for this project): left panel says what the tool explores, who it is for and how to use it, with four suggestion chips; the chat renders Markdown and shows each tool call as a collapsible card (name, arguments, SQL, result) coloured by kind (context / SQL / compute / external / error); the right panel reads `/state` and draws the selected counties against the state-median line per criterion, the latest comparison with its interval, the CDC PLACES cross-check, and the last SQL. On load it pings `/health` and shows a wake-up notice while the Cloud Run instance starts.
 
@@ -196,13 +196,30 @@ Requirements: [uv](https://docs.astral.sh/uv/), Python ≥ 3.10.
 
 ```bash
 uv sync
-gcloud auth application-default login          # Vertex AI (course default)
-VERTEXAI_PROJECT=<your-gcp-project> uv run uvicorn app:app --port 8000
-# or, without GCP:
+
+# Claude API
+ANTHROPIC_API_KEY=<your-key> MODEL="anthropic/claude-sonnet-5-5" uv run uvicorn app:app --port 8000
+
+# Local, no API key: Ollama
+ollama pull gpt-oss:20b
 MODEL="ollama_chat/gpt-oss:20b" uv run uvicorn app:app --port 8000
+
+# Vertex AI (course default)
+gcloud auth application-default login
+VERTEXAI_PROJECT=<your-gcp-project> uv run uvicorn app:app --port 8000
 ```
 
-Environment: `MODEL`, `VERTEX_LOCATION` (default `global`), `VERTEXAI_PROJECT`, `PORT`.
+Models:
+
+| Setup | `MODEL` | Needs |
+|---|---|---|
+| Claude API | `anthropic/claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
+| Local (Ollama) | `ollama_chat/gpt-oss:20b` | Ollama running, `gpt-oss:20b` pulled (13 GB) |
+| Vertex AI (default, deployed) | `vertex_ai/gemini-2.5-flash` | `VERTEXAI_PROJECT`, `roles/aiplatform.user` |
+
+For local runs only `gpt-oss:20b` is supported. Other Ollama models were not tried or lack tool calling (`gemma2:9b`, for one, has none), and the tool loop needs it.
+
+Environment: `MODEL`, `ANTHROPIC_API_KEY`, `VERTEX_LOCATION` (default `global`), `VERTEXAI_PROJECT`, `PORT`.
 
 `compare.py` reproduces the baseline traces above: `uv run compare.py "<question>"` runs the bare model, the `run_sql`-only agent and this agent in sequence.
 
