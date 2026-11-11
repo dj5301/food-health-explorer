@@ -2,7 +2,7 @@
 
 **A Text2SQL agent for health-department staff: where in a state do limited food access, poverty and food-assistance need coincide with diabetes, obesity and food insecurity, county by county, and does the latest CDC data still show the same places?**
 
-Live: **https://food-health-explorer-1060383691779.europe-west1.run.app** · Source: https://github.com/dj5301/food-health-explorer · Path: `text2sql` · Author: dj2763
+Live: **https://food-health-explorer-948672489626.europe-west1.run.app** · Source: https://github.com/dj5301/food-health-explorer · Path: `text2sql` · Author: dj2763
 
 ## Why this topic
 
@@ -99,7 +99,9 @@ After query 1: "How do those counties compare with the rest of the state on pove
 
 ### The same model with no tools and no system prompt
 
-`uv run compare.py --mode notools "<question>"` sends the question to `vertex_ai/gemini-2.5-flash` bare. Answers recorded on 2026-11-05:
+<!-- TODO(dj2763): these no-tools answers and the two plain run_sql traces below were recorded with vertex_ai/gemini-2.5-flash on 2026-11-05, before the deployment moved to gemini-3.8-flash. Re-record them with the deployed model (`gcloud auth application-default login`, then `VERTEXAI_PROJECT=ieor4570-food-health uv run compare.py "<question>"`), or keep them and keep this sentence saying which model produced them. -->
+
+`uv run compare.py --mode notools "<question>"` sends the question to the configured model bare. The answers below were recorded with `vertex_ai/gemini-2.5-flash` on 2026-11-05:
 
 1. NY ranking: a confident table with a "NY State median" diabetes rate of **10.5%** and limited-access median of **14.3%**, listing Bronx, Kings, Queens, Suffolk and Richmond. None of these numbers match the published tables (true medians 8.5% and 3.87%; the actual top counties are upstate).
 2. Texas no-car counties: Maverick, Hidalgo, Cameron, Webb, Presidio with "~20.0%", "~15.0%" … and a comparison table of poverty and food insecurity values. The Atlas ranks Kent, Cottle, Zavala, Kenedy and Terrell; none of the five named counties are in the top 5.
@@ -168,7 +170,7 @@ I then added `profile_counties`, which computes the comparison and writes the ex
 
 ## Interface and agent architecture
 
-- **Backend** (`app.py`): FastAPI + LiteLLM, the course starter's bounded tool loop (`MAX_TOOL_ROUNDS = 10`, temperature 0.2, short backoff on Vertex 429). The temperature is not sent to the Claude API, where `claude-haiku-5-5` accepts only its default. Model from `MODEL` through LiteLLM: Claude API (`anthropic/claude-haiku-5-5`), local Ollama (`ollama_chat/gpt-oss:20b`, the only local model supported), or Vertex AI (`vertex_ai/gemini-2.5-flash`, the default and what is currently deployed). Single agent; every tool call carries `"agent": "analyst"`.
+- **Backend** (`app.py`): FastAPI + LiteLLM, the course starter's bounded tool loop (`MAX_TOOL_ROUNDS = 10`, temperature 0.2, short backoff on Vertex 429). The temperature is not sent to the Claude API, where `claude-haiku-5-5` accepts only its default. Model from `MODEL` through LiteLLM: Claude API (`anthropic/claude-haiku-5-5`), local Ollama (`ollama_chat/gpt-oss:20b`, the only local model supported), or Vertex AI (`vertex_ai/gemini-3.8-flash`, the default and what is deployed; a GCP project created after the 2.5 models were closed to new projects gets 404 for `gemini-2.5-flash`). Single agent; every tool call carries `"agent": "analyst"`.
 - **Harness guards** (code, one retry each): figures in the draft must appear in the user's message or a tool result (dollar, percent and percentage-point values, including ×100 rescaling; "95% interval" / "95% CI" is read as the method's name, not a figure) or the draft is discarded and the model told to call a tool; if the second draft still has unbacked figures it is returned with an "Unverified figures" note listing them, so they are never passed off silently; a data question answered with no successful data tool, or after every data tool errored, is sent back (the model once invented a 31-county list after a failed query); verbatim repeats and empty replies are retried; a draft that adds what no tool produced (a verdict that a value is "not credible", a hedged "likely", an unprompted "I can also...") is sent back, matched on wording that appears in no tool result; after a data tool runs the answer must open with one bold sentence; a funding/policy question must contain the one-sentence decline.
 - **Frontend** (`index.html`, written for this project): left panel says what the tool explores, who it is for and how to use it, with four suggestion chips; the chat renders Markdown and shows each tool call as a collapsible card (name, arguments, SQL, result) coloured by kind (context / SQL / compute / external / error); the right panel reads `/state` and draws the selected counties against the state-median line per criterion, the latest comparison with its interval, the CDC PLACES cross-check, and the last SQL. On load it pings `/health` and shows a wake-up notice while the Cloud Run instance starts.
 
@@ -224,7 +226,7 @@ Models:
 |---|---|---|
 | Claude API | `anthropic/claude-haiku-5-5` | `ANTHROPIC_API_KEY` |
 | Local (Ollama) | `ollama_chat/gpt-oss:20b` | Ollama running, `gpt-oss:20b` pulled (13 GB) |
-| Vertex AI (default, deployed) | `vertex_ai/gemini-2.5-flash` | `VERTEXAI_PROJECT`, `roles/aiplatform.user` |
+| Vertex AI (default, deployed) | `vertex_ai/gemini-3.8-flash` | `VERTEXAI_PROJECT`, `roles/aiplatform.user` |
 
 In my local tests on November 11, 2026, `gpt-oss:20b` answered the New York and Texas sample questions with results that matched the expected answers. For Mississippi, it correctly noted that the database has no county-level child food-insecurity measure, but stopped without reporting the available all-ages figures. I also tried `qwen2.5:7b`, `llama3.1:8b` and `llama3.2:3b`; `gemma2:9b` did not support tool calling in my setup. These observations come from one test run per model, so they are not enough to establish a general reliability ranking. The local setup I document and support here uses `gpt-oss:20b`.
 
@@ -234,9 +236,12 @@ Environment: `MODEL`, `ANTHROPIC_API_KEY`, `VERTEX_LOCATION` (default `global`),
 
 ## Deployment
 
-GCP Cloud Run (`europe-west1`), Google Cloud buildpacks from this repository; `Procfile` → `uvicorn app:app --host 0.0.0.0 --port $PORT`. Deployed with `--max-instances 1` (in-memory sessions), 1 GiB memory, startup CPU boost. Gemini is called through the service account (`roles/aiplatform.user`); `VERTEXAI_PROJECT` is a service environment variable; no credentials are committed. Continuous deployment from `main` via Developer Connect, per the course guide.
+GCP Cloud Run (`europe-west1`), Google Cloud buildpacks from this repository; `Procfile` → `uvicorn app:app --host 0.0.0.0 --port $PORT`. Deployed with `--max-instances 1` (in-memory sessions), 1 GiB memory, startup CPU boost. GCP project `ieor4570-food-health`. Gemini is called through the default compute service account (`roles/aiplatform.user`; `roles/run.builder` so source deploys can build); `VERTEXAI_PROJECT` and `MODEL` are service environment variables; no credentials are committed, and `.gcloudignore` keeps `.env` and `.venv` out of the upload.
+
+<!-- TODO(dj2763): continuous deployment from main is not set up yet for this project. Connect the repository in the Cloud Run console (Developer Connect), then replace this comment with one sentence saying so. Until then each deploy is the command below. -->
 
 ```bash
 gcloud run deploy food-health-explorer --source . --region europe-west1 --allow-unauthenticated \
-  --max-instances 1 --memory 1Gi --cpu-boost --set-env-vars VERTEXAI_PROJECT=<project-id>
+  --max-instances 1 --memory 1Gi --cpu-boost --timeout 300 \
+  --set-env-vars VERTEXAI_PROJECT=<project-id>,MODEL=vertex_ai/gemini-3.8-flash
 ```

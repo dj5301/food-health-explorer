@@ -169,6 +169,18 @@ GLOSSARY = [
         "not": {"COALESCE(food_stores.superc20, 0) = 0": "turns 'suppressed' into 'zero' and overstates store deserts"},
     },
     {
+        "term": "child food insecurity / food insecurity among children",
+        "definition": "NO county-level child food insecurity measure exists in this database. The Atlas food insecurity columns are STATE-level and cover households, not children. Report that the child measure is unavailable, then use the all-ages county measure, labelled as all ages.",
+        "use": [
+            "health_rankings.pct_food_insecure (all ages, county-level; label it 'all ages, not children')",
+            "socioeconomic.childpovrate21 (child poverty, county-level)",
+            "health_rankings.pct_enrolled_in_free_or_reduced_lunch (students eligible for free or reduced-price lunch, county-level)"
+        ],
+        "not": {
+            "food_insecurity.foodinsec_21_23": "STATE-level household measure, not a child measure"
+        }
+    },
+    {
         "term": "latest year",
         "definition": "Atlas columns end in a 2-digit year (e.g. _19 = 2019, _22 = 2022). When a variable has two years, the larger suffix is the latest. PCH_/CH_ columns are the change between the two years, not a level.",
         "use": [],

@@ -21,8 +21,8 @@ from tools import TOOLS, new_state, run_tool
 # Any LiteLLM tool-calling model id. Supported setups:
 #   MODEL="anthropic/claude-haiku-5-5"  + ANTHROPIC_API_KEY   (Claude API)
 #   MODEL="ollama_chat/gpt-oss:20b"                            (local; the only Ollama model this project supports)
-#   MODEL="vertex_ai/gemini-2.5-flash"   + VERTEXAI_PROJECT    (course default, currently deployed)
-MODEL = os.environ.get("MODEL", "vertex_ai/gemini-2.5-flash")
+#   MODEL="vertex_ai/gemini-3.8-flash"   + VERTEXAI_PROJECT    (default, deployed; new GCP projects cannot call gemini-2.5-flash)
+MODEL = os.environ.get("MODEL", "vertex_ai/gemini-3.8-flash")
 VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
 MAX_TOOL_ROUNDS = 10  # a Text2SQL turn is mappings -> enum values -> one or two queries -> analysis
 TEMPERATURE = 0.2  # low: consistent tool use and format, not creative prose

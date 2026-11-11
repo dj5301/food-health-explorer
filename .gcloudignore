@@ -1,0 +1,5 @@
+# Files Cloud Run source deploys must not upload.
+.gcloudignore
+.git
+.gitignore
+#!include:.gitignore
