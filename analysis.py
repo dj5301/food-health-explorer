@@ -17,6 +17,12 @@ THRESHOLD_TYPES = ("state_median", "percentile", "value")
 BOOTSTRAP_REPS = 2000
 BOOTSTRAP_SEED = 4570  # fixed: the same question must give the same interval
 MIN_GROUP_SIZE = 3
+CRITERION_KEYS = {"metric", "direction", "threshold"}
+# Appended to every criteria error: a model that sees the right shape fixes its call in one round.
+CRITERION_EXAMPLE = (
+    'Expected shape: {"metric": "food_access.pct_laccess_lowi19", "direction": "high", "threshold": {"type": "state_median"}}; '
+    'other thresholds: {"type": "percentile", "value": 75} or {"type": "value", "value": 10}.'
+)
 
 
 # --- Names ---
@@ -110,13 +116,21 @@ def validate_criteria(criteria: list, metrics_info: dict) -> list[dict]:
     out = []
     for c in criteria:
         if not isinstance(c, dict) or "metric" not in c:
-            raise ValueError("Each criterion needs at least a 'metric' (table.column).")
+            raise ValueError(f"Each criterion must be an object with at least a 'metric' (table.column). {CRITERION_EXAMPLE}")
+        unknown = sorted(set(c) - CRITERION_KEYS)
+        if unknown:
+            # "operator": "<" silently read as the default direction 'high' would rank the wrong end.
+            raise ValueError(f"Unknown criterion field(s) {unknown}. Say above/below with direction ('high' or 'low'), not an operator. {CRITERION_EXAMPLE}")
         direction = str(c.get("direction", "high")).lower()
         if direction not in DIRECTIONS:
-            raise ValueError(f"direction must be one of {DIRECTIONS}, got '{direction}'.")
+            raise ValueError(f"direction must be one of {DIRECTIONS}, got '{direction}'. {CRITERION_EXAMPLE}")
         threshold = c.get("threshold") or {"type": "state_median"}
-        if isinstance(threshold, (int, float)):
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
             threshold = {"type": "value", "value": float(threshold)}
+        elif isinstance(threshold, str) and threshold.strip().lower().replace(" ", "_") in {"median", "state_median"}:
+            threshold = {"type": "state_median"}  # the only shorthand with one possible meaning
+        if not isinstance(threshold, dict):
+            raise ValueError(f"threshold must be an object, got {threshold!r}. {CRITERION_EXAMPLE}")
         ttype = str(threshold.get("type", "state_median"))
         if ttype not in THRESHOLD_TYPES:
             raise ValueError(f"threshold.type must be one of {THRESHOLD_TYPES}, got '{ttype}'.")

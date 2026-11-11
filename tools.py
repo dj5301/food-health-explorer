@@ -44,6 +44,8 @@ for e in TABLES["counties"]["columns"][1]["enum_values"]:
     STATES[e["value"].lower()] = (e["value"], e["label"])
     STATES[e["label"].lower()] = (e["value"], e["label"])
 NUMERIC_TYPES = {"BIGINT", "DOUBLE", "INTEGER", "HUGEINT", "DECIMAL", "FLOAT"}
+# Atlas columns that repeat one state value on every county row: column name -> table.
+STATE_LEVEL_COLUMNS = {c: t for (t, c), m in COLUMNS.items() if m.get("is_state_level") and t != "health_rankings_state"}
 
 
 def new_state() -> dict:
@@ -275,6 +277,17 @@ def run_sql(state: dict, query: str) -> str:
     out = {"columns": columns, "rows": [list(r) for r in rows[:MAX_ROWS]], "row_count": min(len(rows), MAX_ROWS), "truncated": len(rows) > MAX_ROWS}
     if len(rows) == 0:
         out["note"] = "No rows. Check filters: county_name has no 'County' suffix, state_abbr is upper-case, enum values are exact."
+    # The query still runs (a state's own rate is a fair lookup), but the result says what the number is.
+    # SELECT * names no column, so the returned column names are checked too.
+    named = set(re.findall(r"[a-z_][a-z0-9_]*", q.lower())) | {c.lower() for c in columns}
+    state_level = sorted(named & set(STATE_LEVEL_COLUMNS))
+    if state_level and not state.get("plain_sql"):
+        alts = [a for a in (_glossary_alternative(f"{STATE_LEVEL_COLUMNS[c]}.{c}") for c in state_level) if a]
+        out["warnings"] = [
+            f"STATE-level column(s) in this query: {', '.join(state_level)}. Every county in a state carries the same value, "
+            "so these numbers are the state's rate, not each county's. Do not rank, compare or take a county median with them, "
+            "and do not present them as county values." + (f" {' '.join(dict.fromkeys(alts))}" if alts else "")
+        ]
     return json.dumps(out, default=str)
 
 
@@ -285,7 +298,12 @@ def rank_counties(state: dict, criteria: list, state_name: str | None = None, ex
     try:
         abbr, full = resolve_state(state_name, state)
         if not isinstance(criteria, list) or not criteria:
-            raise ValueError("criteria must be a non-empty list of {metric, direction, threshold}.")
+            raise ValueError(f"criteria must be a non-empty list of objects. {analysis.CRITERION_EXAMPLE}")
+        # A bare column name is a criterion with the defaults; "col > median" style strings are not parsed.
+        criteria = [{"metric": c.strip()} if isinstance(c, str) and re.fullmatch(r"[\w.]+", c.strip()) else c for c in criteria]
+        if any(not isinstance(c, dict) for c in criteria):
+            raise ValueError(f"Each criterion must be an object, not an expression string. {analysis.CRITERION_EXAMPLE}")
+        analysis.validate_criteria(criteria, {})  # shape errors first: a missing 'metric' must not read as an unknown column
         usable, info, excluded_metrics = _resolve_metrics([c.get("metric") if isinstance(c, dict) else c for c in criteria])
         if not usable:
             return _err("no_usable_metric", "None of the requested metrics can rank counties.", excluded_metrics=excluded_metrics)

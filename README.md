@@ -58,7 +58,7 @@ The model never computes a number. `tools.py` holds the JSON schemas and dispatc
 
 ### Data tools
 
-**`run_sql(query)`** — one read-only DuckDB `SELECT`/`WITH`, max 200 rows, 15 s timeout, connection opened with `read_only=True, enable_external_access=False, lock_configuration=True`. Guardrails: forbidden keywords (`attach`, `copy`, `install`, `create`, `insert`, …), raw sentinels (`-9999`), and the suppression trap above. Empty results include a hint about common filter mistakes (`county_name` has no "County" suffix; state codes are upper-case). Errors: `read_only`, `invalid_argument`, `sql_error` (DuckDB's message), `timeout`.
+**`run_sql(query)`** — one read-only DuckDB `SELECT`/`WITH`, max 200 rows, 15 s timeout, connection opened with `read_only=True, enable_external_access=False, lock_configuration=True`. Guardrails: forbidden keywords (`attach`, `copy`, `install`, `create`, `insert`, …), raw sentinels (`-9999`), and the suppression trap above. A query that reads a state-level column still runs, but the result carries a `warnings` entry naming the column, saying the value is the state's rate on every county row, and pointing to the county-level alternative. Empty results include a hint about common filter mistakes (`county_name` has no "County" suffix; state codes are upper-case). Errors: `read_only`, `invalid_argument`, `sql_error` (DuckDB's message), `timeout`.
 
 **`rank_counties(criteria, state_name?, exclude_counties?, require_counties?, top_n?)`** — the counties in a state that meet **every** criterion, ordered by how extreme they are.
 - `criteria`: list of `{metric: "table.column", direction: "high"|"low", threshold: {type: "state_median"|"percentile"|"value", value?}}` (default threshold: state median).
@@ -217,7 +217,7 @@ Models:
 | Local (Ollama) | `ollama_chat/gpt-oss:20b` | Ollama running, `gpt-oss:20b` pulled (13 GB) |
 | Vertex AI (default, deployed) | `vertex_ai/gemini-2.5-flash` | `VERTEXAI_PROJECT`, `roles/aiplatform.user` |
 
-For local runs only `gpt-oss:20b` is supported. Other Ollama models were not tried or lack tool calling (`gemma2:9b`, for one, has none), and the tool loop needs it.
+For local runs only `gpt-oss:20b` is supported, and it is less reliable than the hosted models: of the three sample queries below it gets the New York and Texas ones right, but on the Mississippi one it stops at "no county-level child measure" and does not go on to report the all-ages county figures. `qwen2.5:7b`, `llama3.1:8b` and `llama3.2:3b` were tried and did worse; `gemma2:9b` has no tool calling.
 
 Environment: `MODEL`, `ANTHROPIC_API_KEY`, `VERTEX_LOCATION` (default `global`), `VERTEXAI_PROJECT`, `PORT`.
 

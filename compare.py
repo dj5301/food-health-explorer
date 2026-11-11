@@ -26,7 +26,7 @@ RUN_SQL_ONLY = [t for t in TOOLS if t["function"]["name"] == "run_sql"]
 def run_plain(messages: list[dict], tools: list | None) -> tuple[str, list[dict]]:
     """The simplest loop: call tools until the model answers. No harness checks, no context tools."""
     calls = []
-    state = new_state()
+    state = new_state() | {"plain_sql": True}  # the baseline gets run_sql without the state-level warning
     for _ in range(app.MAX_TOOL_ROUNDS):
         reply = app.complete(messages, tools=tools)
         messages += [reply.model_dump()]
