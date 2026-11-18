@@ -87,7 +87,7 @@ Expected: `rank_counties` with two state-median criteria. Thresholds: low-income
 
 **2. Comparison with uncertainty** — "In Texas, which 5 counties have the highest share of households with no car and more than 1 mile from a store? Compare them to the rest of Texas on poverty rate and food insecurity."
 
-Expected: `rank_counties` on `food_access.pct_laccess_hhnv19` (one criterion, `threshold: {type: "none"}`, `top_n: 5`) → Kent 10.1%, Cottle 9.2%, Zavala 8.6%, Kenedy 7.2%, Terrell 6.3%; then `compare_groups` on `socioeconomic.povrate21` and `health_rankings.pct_food_insecure`: poverty median **17.4% vs 15.5%** (+1.9 pp, 95% interval [−3.8, 9.9]), food insecurity **14.1% vs 14.8%** (−0.7 pp, [−5.7, 8.0]); both intervals include zero, so the answer says the gaps could be chance. With `claude-haiku-5-5` the trace may show one more call after these two, `profile_counties` on the five counties, which it uses to fill the per-county table; the numbers above do not change.
+Expected: `rank_counties` on `food_access.pct_laccess_hhnv19` (one criterion, `threshold: {type: "none"}`, `top_n: 5`) → Kent 10.1%, Cottle 9.2%, Zavala 8.6%, Kenedy 7.2%, Terrell 6.3%; then `compare_groups` on `socioeconomic.povrate21` and `health_rankings.pct_food_insecure`: poverty median **17.4% vs 15.5%** (+1.9 pp, 95% interval [−3.8, 9.9]), food insecurity **14.1% vs 14.8%** (−0.7 pp, [−5.7, 8.0]); both intervals include zero, so the answer says the gaps could be chance. The trace may show one more call after these two, `profile_counties` on the five counties, which the model uses to fill the per-county table (seen with both `gemini-3.8-flash` and `claude-haiku-5-5`); the numbers above do not change.
 
 **3. Aggregate with a metric the data lacks** — "What are the median adult diabetes rate and median child food insecurity rate across Mississippi counties, and how many Mississippi counties have child food insecurity above 25%?"
 
@@ -99,66 +99,98 @@ After query 1: "How do those counties compare with the rest of the state on pove
 
 ### The same model with no tools and no system prompt
 
-<!-- TODO(dj2763): these no-tools answers and the two plain run_sql traces below were recorded with vertex_ai/gemini-2.5-flash on 2026-11-05, before the deployment moved to gemini-3.8-flash. Re-record them with the deployed model (`gcloud auth application-default login`, then `VERTEXAI_PROJECT=ieor4570-food-health uv run compare.py "<question>"`), or keep them and keep this sentence saying which model produced them. -->
+`uv run compare.py --mode notools "<question>"` sends the question to the configured model bare. The answers below were recorded with the deployed model, `vertex_ai/gemini-3.8-flash`, on 2026-11-18, one run per question:
 
-`uv run compare.py --mode notools "<question>"` sends the question to the configured model bare. The answers below were recorded with `vertex_ai/gemini-2.5-flash` on 2026-11-05:
+1. NY ranking: a confident table with a "New York State county median" diabetes rate of **9.1%** and a limited-access median of **~3.2%**, listing Allegany, Sullivan, Cattaraugus, Delaware and Chautauqua with values such as "~10.2%" and "~9.8%". The published medians are 8.5% and 3.87%. Of the five named counties only Chautauqua meets both criteria in the tables, and it ranks 7th of the 11 that do; none of the five is in the actual top 5.
+2. Texas no-car counties: Brooks, Zavala, Presidio, Starr and "San Augustine (or Willacy)" with "~14%–16%", "~13%–15%" …, and a comparison table giving the five a poverty rate of "~27.9%" against "~13.8%" for Texas and food insecurity of "~23.1%" against "~15.5%", described as "more than double the state average". The Atlas ranks Kent, Cottle, Zavala, Kenedy and Terrell; only Zavala is in both lists, and its published value is 8.6%. For the actual five, the gaps in poverty and food insecurity cannot be told apart from chance (query 2 above).
+3. Mississippi medians: "approximately 15.2% – 15.5%" diabetes, "24.5% – 26.8%" child food insecurity, and "~38 to 43" or "~52 to 56" counties above 25% depending on the release, citing sources it did not query. The tables give 13.0%, 17.9% (all ages) and 2.
 
-1. NY ranking: a confident table with a "NY State median" diabetes rate of **10.5%** and limited-access median of **14.3%**, listing Bronx, Kings, Queens, Suffolk and Richmond. None of these numbers match the published tables (true medians 8.5% and 3.87%; the actual top counties are upstate).
-2. Texas no-car counties: Maverick, Hidalgo, Cameron, Webb, Presidio with "~20.0%", "~15.0%" … and a comparison table of poverty and food insecurity values. The Atlas ranks Kent, Cottle, Zavala, Kenedy and Terrell; none of the five named counties are in the top 5.
-3. Mississippi medians: "approximately 16.2%" diabetes, "22.1%" child food insecurity, "30 counties" above 25%, citing sources it did not query. The tables give 13.0%, 17.9% (all ages) and 2.
+## Two questions a plain `run_sql` agent could not answer
 
-## Two questions a plain `run_sql` agent got wrong
+`uv run compare.py --mode baseline "<question>"` runs the same model with only `run_sql`, a one-paragraph prompt listing the table names, and none of the mappings, glossary, guards or analysis tools (its `run_sql` also runs without the state-level warning). It has the same budget as this agent, 10 tool rounds. Everything in this section was recorded with the deployed model, `vertex_ai/gemini-3.8-flash`, on 2026-11-18. The traces are verbatim from `compare.py` (results truncated, schema lookups summarised).
 
-`uv run compare.py --mode baseline "<question>"` runs the same model with only `run_sql`, a one-paragraph prompt listing the table names, and none of the mappings, glossary, guards or analysis tools (its `run_sql` also runs without the state-level warning). Both traces below are verbatim from `compare.py` (results truncated).
+I ran each question below three times in the plain setup. All nine runs ended the same way: the model used its ten rounds on finding out what the columns mean and returned `(tool-call limit reached)` with no answer. It did not fall into the traps. In eight of the nine runs it noticed that something was wrong with the column it had picked, then spent its remaining rounds looking for a replacement; in the ninth, a run of question B, it was still looking up columns when the rounds ran out. I did not test whether a larger round budget would let it finish.
 
 ### A. "Which 5 New York counties have the highest adult obesity rate, and what is each county's rate?"
 
-**Plain `run_sql`** — after discovering columns by `SELECT * … LIMIT 1`, it ran
+**Plain `run_sql`** — calls 1–3 searched `information_schema.columns` for obesity columns and found only the Atlas's two. Then:
 
 ```sql
-SELECT counties.county_name, food_health.pct_obese_adults22
-FROM counties JOIN food_health USING (fips)
-WHERE counties.state_abbr = 'NY' ORDER BY food_health.pct_obese_adults22 DESC LIMIT 5
--- → Albany 30.1, Allegany 30.1, Bronx 30.1, Broome 30.1, Cattaraugus 30.1
+-- call 4
+SELECT c.county_name, fh.pct_obese_adults22, fh.pct_obese_adults17
+FROM counties c JOIN food_health fh USING (fips)
+WHERE c.state_abbr = 'NY' ORDER BY fh.pct_obese_adults22 DESC NULLS LAST LIMIT 10
+-- → Albany 30.1, 25.7 · Allegany 30.1, 25.7 · Bronx 30.1, 25.7 · Broome 30.1, 25.7 · Cattaraugus 30.1, 25.7 · …
+
+-- call 5
+SELECT DISTINCT pct_obese_adults22 FROM food_health fh JOIN counties c USING (fips) WHERE c.state_abbr = 'NY'
+-- → 30.1
+
+-- call 9
+SELECT state_abbr, COUNT(DISTINCT pct_obese_adults22), COUNT(DISTINCT pct_obese_adults17)
+FROM counties JOIN food_health USING (fips) GROUP BY state_abbr
+HAVING COUNT(DISTINCT pct_obese_adults22) > 1 OR COUNT(DISTINCT pct_obese_adults17) > 1
+-- → no rows
 ```
 
-and answered: *"All New York counties have the same reported adult obesity rate of 30.1%. The top 5 counties by adult obesity rate are: Albany 30.1%, Schoharie 30.1%, Bronx 30.1% …"* — `pct_obese_adults22` is a state-level column; 30.1% is New York State's rate repeated 62 times, and a "top 5" from it is meaningless.
+Calls 6–8 and 10 were more schema lookups (one `DESCRIBE`, rejected as not a `SELECT`; the column list of `health_rankings`). Answer: `(tool-call limit reached)`.
+
+It worked out by query that `pct_obese_adults22` holds one value per state: 30.1% is New York State's rate repeated 62 times. That took five rounds, and the remaining rounds confirmed that no table in the database has a county-level obesity column. The plain agent has no way to reach one, so the question cannot be answered from where it stands.
 
 **This agent** — `read_mappings` marks the column state-level and the glossary entry for *adult obesity* points to CDC PLACES, so it called
 
 ```
-fetch_cdc_places({"scope": "whole_state", "state_name": "New York", "measures": ["OBESITY"], "top_n": 5})
-→ ranking_note: "All 62 counties in New York were fetched and sorted by Obesity among adults (BMI >= 30) (highest first) …"
+read_mappings({"search": "obesity"})
+→ "Adult obesity rate, 2017 [STATE-level: same value for every county in the state]" … "is_state_level": true
+fetch_cdc_places({"scope": "whole_state", "state_name": "NY", "measures": ["OBESITY"], "top_n": 5})
+→ ranking_note: "All 62 counties in New York were fetched and sorted by Obesity among adults (BMI >= 30) (highest first); showing the top 5. Ranks are 1 = highest."
 ```
 
-and answered: *"**St. Lawrence County has the highest adult obesity rate in New York at 42.9%, which is 10 percentage points above the state median.**"* with the table St. Lawrence 42.9, Franklin 40.8, Lewis 40.7, Niagara 39.4, Montgomery 38.9 (CDC PLACES 2025 release, 2023 data, state median 32.9%).
+and answered: *"**The Food Environment Atlas cannot rank counties by adult obesity because its obesity measures are state-level, but CDC PLACES model-based estimates identify St. Lawrence County as having New York's highest adult obesity rate at 42.9%, followed by Franklin (40.8%), Lewis (40.7%), Niagara (39.4%), and Montgomery (38.9%).**"* with a table giving each county's 95% confidence interval and its difference from the state county median of 32.9% (CDC PLACES 2025 release, 2023 data).
 
 ### B. "In Texas, which 5 counties have the highest share of households with no car and more than 1 mile from a store? Compare them to the rest of Texas on poverty rate and food insecurity."
 
-**Plain `run_sql`** — found the right access column, then for food insecurity picked the Atlas table:
+**Plain `run_sql`** — calls 1–6 discovered columns (`DESCRIBE`, rejected; `SELECT * … LIMIT 1` on three tables; two `information_schema` searches). Then:
 
 ```sql
-SELECT counties.county_name, food_access.pct_laccess_hhnv19, socioeconomic.povrate21, food_insecurity.foodinsec_21_23
-FROM counties JOIN food_access USING (fips) JOIN socioeconomic USING (fips) JOIN food_insecurity USING (fips)
-WHERE counties.state_abbr = 'TX' ORDER BY food_access.pct_laccess_hhnv19 DESC LIMIT 5
--- → Kent 10.06, 11.5, 16.9 · Cottle 9.23, 18.8, 16.9 · Zavala 8.62, 25.4, 16.9 · …
-SELECT AVG(socioeconomic.povrate21), AVG(food_insecurity.foodinsec_21_23) FROM … WHERE state_abbr = 'TX' AND county_name NOT IN (…)
--- → 15.80, 16.90
+-- call 7
+SELECT c.county_name, c.fips, fa.pct_laccess_hhnv19, fa.pct_laccess_hhnv15, se.povrate21, fi.foodinsec_21_23, hr.pct_food_insecure
+FROM counties c JOIN food_access fa USING (fips)
+LEFT JOIN socioeconomic se USING (fips) LEFT JOIN food_insecurity fi USING (fips) LEFT JOIN health_rankings hr USING (fips)
+WHERE c.state_abbr = 'TX' ORDER BY fa.pct_laccess_hhnv19 DESC NULLS LAST LIMIT 10
+-- → Kent 10.06, 4.28, 11.5, 16.9, 14.1 · Cottle 9.23, 11.74, 18.8, 16.9, 19.5 · …
+
+-- call 8
+SELECT DISTINCT foodinsec_21_23, foodinsec_18_20 FROM counties JOIN food_insecurity USING (fips) WHERE state_abbr = 'TX'
+-- → 16.9, 13.3
+
+-- call 10
+SELECT * FROM health_rankings_state WHERE state_abbr = 'TX'
+-- → Binder Error: Referenced column "state_abbr" not found in FROM clause!
 ```
 
-and answered: *"The average food insecurity rate for these 5 counties is 16.90%. For the rest of Texas counties, the average food insecurity rate is also 16.90%. This suggests that, on average, food insecurity is similar between these two groups."* — `foodinsec_21_23` is Texas's statewide rate on every row, so the "comparison" compares a constant with itself. It also computed the 5-county poverty mean (17.46%) in its head.
+Answer: `(tool-call limit reached)`.
 
-**This agent** — rejected the state-level column via the mappings, used County Health Rankings' county measure, and let `compare_groups` do the arithmetic:
+By call 7 it had the right five counties on screen and both food-insecurity columns side by side. Call 8 established that `foodinsec_21_23` is Texas's statewide rate on every row. It then ran out of rounds before computing the comparison with the rest of the state, which is the second half of the question.
+
+**This agent** — after six `read_mappings` lookups (searches for the car, poverty and food-insecurity columns, then the `food_access` table and the overview) it used County Health Rankings' county measure, not the state-level Atlas column, and let the tools do the arithmetic:
 
 ```
-rank_counties({"criteria": [{"metric": "food_access.pct_laccess_hhnv19", "direction": "high"}], "state_name": "Texas", "top_n": 5})
-compare_groups({"metrics": ["socioeconomic.povrate21", "health_rankings.pct_food_insecure"], "group_a": "selected", "group_b": "rest_of_state"})
-→ "The median food insecurity rate in the 5 selected counties was 14.1% (n=5) vs 14.8% in the other 249 counties … The 95% bootstrap interval [-5.7, 8.0] includes zero, so the gap could be chance."
+rank_counties({"top_n": 5, "state_name": "Texas", "criteria": [{"direction": "high", "threshold": {"type": "none"}, "metric": "food_access.pct_laccess_hhnv19"}]})
+compare_groups({"metrics": ["socioeconomic.povrate21", "health_rankings.pct_food_insecure"]})
+→ "% Food Insecure (2020): median 14.1% in the 5 selected counties (n=5) vs 14.8% in the other 249 counties in the state (n=249), a difference of -0.70 percentage points; the 95% bootstrap interval -5.70 to +8.00 includes zero, so the gap could be chance."
+profile_counties({"metrics": ["food_access.pct_laccess_hhnv19", "socioeconomic.povrate21", "health_rankings.pct_food_insecure"], "state_name": "Texas", "counties": ["Kent", "Cottle", "Zavala", "Kenedy", "Terrell"]})
 ```
 
-Answer: *"**The five Texas counties with the highest share of households with no car and low access to a store are Kent (10.1%), Cottle (9.2%), Zavala (8.6%), Kenedy (7.2%), and Terrell (6.3%).** These counties have a higher median poverty rate (17.4%) compared to the rest of Texas (15.5%) … the median food insecurity rate in these counties (14.1%) is slightly lower than the rest of Texas (14.8%) … could be due to chance."*
+Answer: *"**Kent, Cottle, Zavala, Kenedy, and Terrell have the highest shares of households with no car and low store access in Texas, led by Kent at 10.1% (4.7x the state median of 2.1%), but their differences in poverty and food insecurity compared to the rest of the state cannot be distinguished from chance.**"* followed by a per-county table and the comparison: poverty 17.4% vs 15.5% (+1.9 pp, [-3.8, 9.9]), food insecurity 14.1% vs 14.8% (-0.7 pp, [-5.7, 8.0]), both marked "Interval excludes zero? No".
 
-A third case worth knowing: asked how many New York counties had *zero* supercenters, the plain agent answered "no New York counties had zero supercenters in 2020" because `superc20 = 0` matches nothing; the suppressed counties are `NULL`. This agent reports "31 counties have fewer than three supercenters" and says why.
+This run used nine tool calls, one short of the limit. What differs is where the rounds go: the mappings told it in one lookup which food-insecurity column is county-level, and `rank_counties` and `compare_groups` each did in one call what the plain agent would have needed several queries for.
+
+A third case, same result: asked how many New York counties had *zero* supercenters in 2020 and their median poverty rate, the plain agent ran `WHERE … fs.superc20 = 0`, got no rows, then counted the column over all counties (3,144 rows: 675 with a value, 0 zeros, 2,469 `NULL`) and hit the limit there. It had found that the blanks are `NULL`, but nothing in the database says that `NULL` means "fewer than three, suppressed". This agent reports "31 counties have fewer than three supercenters" and says why.
+
+### What the older model did with the same questions
+
+On 2026-11-05 the deployment used `vertex_ai/gemini-2.5-flash`, and the plain agent with that model did answer, wrongly. For A it reported *"All New York counties have the same reported adult obesity rate of 30.1%"* and then listed a top 5 from the constant column. For B it concluded that food insecurity was *"also 16.90%"* in both groups, comparing the statewide constant with itself. For the supercenter question it answered that no New York county had zero supercenters. So across the two models the plain setup either gave a confident wrong answer or gave none; in neither case did it produce the answer this agent gives.
 
 ## What I observed while testing
 
