@@ -446,7 +446,9 @@ Environment variables:
 - **Service settings:** `--max-instances 1` (sessions are in memory), 1 GiB memory, startup CPU boost, 300 s request timeout.
 - **Credentials:** Gemini is called through the default compute service account (`roles/aiplatform.user`; `roles/run.builder` so source deploys can build). `VERTEXAI_PROJECT` and `MODEL` are service environment variables. No credentials are committed, and `.gcloudignore` keeps `.env` and `.venv` out of the upload.
 
-<!-- TODO(dj2763): continuous deployment from main is not set up yet for this project. Connect the repository in the Cloud Run console (Developer Connect), then replace this comment with one sentence saying so. Until then each deploy is the command below. -->
+- **Continuous deployment:** every push to `main` triggers a Cloud Build build (buildpacks) that deploys a new revision of the service. The deploy step changes only the image, so the environment variables and service settings above carry over.
+
+A manual deploy from a local checkout, for example to another project:
 
 ```bash
 gcloud run deploy food-health-explorer --source . --project <project-id> --region europe-west1 --allow-unauthenticated \
