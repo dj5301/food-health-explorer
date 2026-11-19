@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from tools import TOOLS, new_state, run_tool
+from tools import TOOLS, new_state, resolve_state, run_tool
 
 # --- Config ---
 
@@ -435,6 +435,8 @@ def state(session_id: str | None = None):
         "state_abbr": s["state_abbr"],
         "state_name": s["state_name"],
         "selected": [{"fips": f, "county_name": n} for f, n in zip(s["selected_fips"], s["selected_names"])],
+        # A one-county lookup in another state keeps the selection, so the panel names the selection's own state.
+        "selected_state_name": resolve_state(s["selected_state"], s)[1] if s.get("selected_state") else None,
         "excluded_fips": s["excluded_fips"],
         "last_sql": s["last_sql"],
         "last_ranking": s["last_ranking"],

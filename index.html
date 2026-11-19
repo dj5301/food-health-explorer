@@ -156,7 +156,7 @@
   <aside id="session">
     <h2>Session</h2>
     <div id="s-state" class="empty">No state yet. Name one in your first question.</div>
-    <h2>Selected counties</h2>
+    <h2 id="h-selected">Selected counties</h2>
     <div id="s-selected" class="empty">A ranking will list the counties that meet every criterion.</div>
     <h2>Comparison</h2>
     <div id="s-compare" class="empty">Group comparisons appear here.</div>
@@ -264,6 +264,10 @@
     $("s-state").innerHTML = st.state_abbr
       ? `<div class="card"><h3>${esc(st.state_name)} (${esc(st.state_abbr)})</h3><div class="sub">${st.last_ranking ? st.last_ranking.n_counties_in_state + " counties · " + st.last_ranking.n_qualifying + " qualify" : ""}${st.excluded_fips && st.excluded_fips.length ? " · " + st.excluded_fips.length + " excluded by you" : ""}</div></div>`
       : `<div class="empty">No state yet. Name one in your first question.</div>`;
+
+    // The selection can belong to another state than the heading above (a one-county lookup keeps it), so say which.
+    $("h-selected").textContent = st.selected && st.selected.length && st.selected_state_name
+      ? "Selected counties · " + st.selected_state_name : "Selected counties";
 
     const r = st.last_ranking;
     if (r && r.selected && r.selected.length) {
