@@ -12,7 +12,7 @@
 ## Try it in two minutes
 
 1. Open the live link. If the service has been idle, the first page load starts a new instance and the page shows a wake-up notice for about 20 seconds.
-2. Click the suggestion chips on the left, top to bottom, in one session. Each answer usually takes 15 to 60 seconds.
+2. Click the suggestion chips on the left, top to bottom, in one session. Each answer usually takes 5 to 30 seconds.
 3. Open any tool card in the chat to see the call, its arguments and the raw result. The right panel shows the selected counties, the latest comparison and the CDC cross-check.
 
 What you should see:
@@ -339,6 +339,7 @@ I then added `profile_counties`, which computes the comparison and writes the ex
 `app.py`: FastAPI + LiteLLM, built on the course starter's bounded tool loop.
 
 - **Loop:** at most 10 tool rounds per turn (`MAX_TOOL_ROUNDS`), temperature 0.2, short backoff on Vertex 429. The temperature is not sent to the Claude API, where `claude-haiku-5-5` accepts only its default.
+- **Thinking effort:** Gemini runs with `reasoning_effort="low"`. At the model's default level, most of a turn's time went into thinking: the final answer to sample query 2 was about 2,300 output tokens (about 1,400 of them thinking) and the turn took 31 s. At `low` it was about 770 tokens and 13–19 s, with the same tool calls and the same figures on all three sample queries, the four follow-ups and the "can't answer" questions. When Vertex is slow, time grows with output tokens, so this keeps turns inside the deadline. The comparison answers in this README (no tools, plain `run_sql`) were recorded at the default level.
 - **Model,** chosen with `MODEL` through LiteLLM:
   - Vertex AI `vertex_ai/gemini-3.8-flash`: the default and what is deployed. A GCP project created after the 2.5 models were closed to new projects gets 404 for `gemini-2.5-flash`.
   - Claude API `anthropic/claude-haiku-5-5`.
@@ -390,7 +391,7 @@ Other endpoints: `GET /state?session_id=`, `POST /clear?session_id=`, `GET /heal
 - The bootstrap interval reflects variation between counties, not the uncertainty of each county's own estimate, so it understates the full uncertainty.
 - Sessions live in process memory on a single Cloud Run instance; a restart clears them.
 - The figure guard checks that numbers exist in tool output, not that the prose uses them correctly, and it retries once: a figure that survives the retry is flagged in the answer, not removed.
-- Response time depends on the model service. Answers usually take 15–60 s, plus about 20 s when an idle instance starts. When Vertex is slow, a turn can reach the 240 s deadline and return the cut-short reply described under [Harness guards](#harness-guards).
+- Response time depends on the model service. Answers usually take 5–30 s, plus about 20 s when an idle instance starts. When Vertex is slow, a turn can reach the 240 s deadline and return the cut-short reply described under [Harness guards](#harness-guards).
 
 ## Next stage plan
 
@@ -436,6 +437,7 @@ Environment variables:
 | `ANTHROPIC_API_KEY` | none | Claude API key |
 | `TURN_DEADLINE_S` | `240` | Seconds a chat turn may run before the cut-short reply |
 | `MODEL_CALL_TIMEOUT_S` | `90` | Seconds one model call may take |
+| `MODEL_REASONING_EFFORT` | `low` | Gemini thinking level on Vertex; empty for the model's default |
 | `PORT` | `8000` | Port when running `app.py` directly |
 
 `compare.py` reproduces the comparison traces above: `uv run compare.py "<question>"` runs the bare model, the `run_sql`-only agent and this agent in sequence.

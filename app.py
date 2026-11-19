@@ -26,6 +26,11 @@ MODEL = os.environ.get("MODEL", "vertex_ai/gemini-3.8-flash")
 VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
 MAX_TOOL_ROUNDS = 10  # a Text2SQL turn is mappings -> enum values -> one or two queries -> analysis
 TEMPERATURE = 0.2  # low: consistent tool use and format, not creative prose
+# Gemini's thinking is most of a turn's time: at the default level the final answer in the Texas sample was
+# ~2,300 output tokens (~1,400 of them thinking) and the turn took 31 s; at "low" it was ~770 tokens and 19 s,
+# with the same tool calls and figures across all sample questions. When Vertex slows down, time grows with
+# output tokens, so this is what keeps a turn inside the deadline. Vertex only; set to "" for the model default.
+REASONING_EFFORT = os.environ.get("MODEL_REASONING_EFFORT", "low")
 RATE_LIMIT_RETRIES = 3
 # Cloud Run cuts a request at 300 s and the course grades each question within 5 minutes. A turn that runs out of
 # time must still return something, so the loop works to its own deadline, well inside both limits.
@@ -200,6 +205,8 @@ def complete(messages: list[dict], tools=TOOLS, deadline: float | None = None):
     several minutes, and the Texas sample question hit Cloud Run's 300 s limit twice with no answer at all.
     """
     kwargs = {"vertex_location": VERTEX_LOCATION} if MODEL.startswith("vertex_ai/") else {}
+    if MODEL.startswith("vertex_ai/") and REASONING_EFFORT:
+        kwargs["reasoning_effort"] = REASONING_EFFORT
     if not MODEL.startswith("anthropic/"):
         # claude-haiku-5-5 rejects any temperature but the default, so the Claude API runs without one.
         kwargs["temperature"] = TEMPERATURE
