@@ -179,7 +179,7 @@ def unbacked_figures(reply: str, messages: list[dict]) -> set[float]:
         return any(abs(f - k) <= max(0.06, 0.005 * f) for k in known)
 
     # "95% CI" / "95% interval" names the method, not a data value; without this the draft is rejected for it.
-    reply = re.sub(r"\b95\s?%\s+(?:CI|confidence|bootstrap|interval)", "", reply or "", flags=re.IGNORECASE)
+    reply = re.sub(r"\b95\s?%\s+(?:CI|confidence|bootstrap|interval|county-resampling)", "", reply or "", flags=re.IGNORECASE)
     return {f for f in extract_figures(reply) if not backed(f)}
 
 

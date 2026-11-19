@@ -277,24 +277,38 @@
       $("s-selected").innerHTML = html;
     } else if (st.selected && st.selected.length) {
       $("s-selected").innerHTML = st.selected.map((s) => `<span class="pill">${esc(s.county_name)}</span>`).join("");
+    } else {
+      empty("s-selected", "A ranking will list the counties that meet every criterion.");
     }
 
+    // Each card names its state; a panel whose result was cleared goes back to its placeholder instead of
+    // keeping the previous state's content.
     const cmp = st.last_comparison;
     if (cmp && cmp.results) {
-      $("s-compare").innerHTML = `<div class="card"><div class="sub">${esc(cmp.group_a.label)} vs ${esc(cmp.group_b.label)}</div><table class="mini"><tr><th>metric</th><th>A</th><th>B</th><th>diff</th><th>excl. 0?</th></tr>` +
+      $("s-compare").innerHTML = `<div class="card"><div class="sub">${cmp.state ? esc(cmp.state) + ": " : ""}${esc(cmp.group_a.label)} vs ${esc(cmp.group_b.label)}</div><table class="mini"><tr><th>metric</th><th>A</th><th>B</th><th>diff</th><th>excl. 0?</th></tr>` +
         cmp.results.map((x) => x.error ? `<tr><td colspan="5" class="sub">${esc(x.label)}: ${esc(x.error)}</td></tr>` :
           `<tr><td title="${esc(x.label)}">${esc(x.label.replace(/\s*\(\d{4}.*\)$/, "").slice(0, 26))}</td><td>${x.units === "percent" ? pct(x.group_a.median) : num(x.group_a.median)}</td><td>${x.units === "percent" ? pct(x.group_b.median) : num(x.group_b.median)}</td><td>${x.median_difference > 0 ? "+" : ""}${num(x.median_difference)}${x.units === "percent" ? " pp" : ""}</td><td class="${x.interval_excludes_zero ? "yes" : "no"}">${x.interval_excludes_zero ? "yes" : "no"}</td></tr>`).join("") +
-        `</table><div class="sub" style="margin-top:0.35rem">"excl. 0?" = the 95% bootstrap interval of the median difference excludes zero. "no" means the gap cannot be told apart from chance, not that there is none. pp = percentage points.</div></div>`;
+        `</table><div class="sub" style="margin-top:0.35rem">"excl. 0?" = the 95% bootstrap interval of the median difference excludes zero. "no" means the gap cannot be told apart from chance, not that there is none. The interval resamples counties only; it does not include each county's own estimate error. pp = percentage points.</div></div>`;
+    } else {
+      empty("s-compare", "Group comparisons appear here.");
     }
 
     const p = st.last_places;
     if (p && p.counties && p.counties.length) {
       const ms = Object.keys(p.measures);
-      $("s-places").innerHTML = `<div class="card"><div class="sub">CDC PLACES, ${esc(p.data_year)} data · bar = county, line = state median</div>` +
+      $("s-places").innerHTML = `<div class="card"><div class="sub">${p.state ? esc(p.state) + " · " : ""}CDC PLACES, ${esc(p.data_year)} data · bar = county, line = state median</div>` +
         ms.map((m) => `<h3 style="margin-top:0.5rem">${esc(p.measures[m])}</h3>${bars(p.counties, (c) => (c.measures[m] || {}).value_pct, (c) => c.county_name, (p.state_benchmark[m] || {}).state_median_pct, (v) => pct(v), "orange")}`).join("") + `</div>`;
+    } else {
+      empty("s-places", "Latest CDC estimates for the selected counties appear here.");
     }
 
     if (st.last_sql) $("s-sql").innerHTML = `<pre class="sql">${esc(st.last_sql)}</pre>`;
+  }
+
+  function empty(id, text) {
+    const el = $(id);
+    el.className = "empty";
+    el.textContent = text;
   }
 
   async function refreshState() {

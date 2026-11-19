@@ -186,16 +186,20 @@ def rank_counties(
             cutoff, rule = None, f"no cutoff: all {state_label} counties with a value, ranked {'highest' if c['direction'] == 'high' else 'lowest'} first"
         else:
             cutoff, rule = float(t["value"]), f"{'at or above' if c['direction'] == 'high' else 'at or below'} {fmt(float(t['value']), metrics_info[m]['units'])}"
-        resolved.append({**c, "label": metrics_info[m]["label"], "units": metrics_info[m]["units"], "source": metrics_info[m].get("source"), "cutoff": None if cutoff is None else round(cutoff, 4), "rule": rule, "state_median": round(median(values), 4), "n_with_data": len(values), "_values": values})
+        # "_cutoff" keeps full precision for the comparison; "cutoff" is rounded for display only. Comparing against
+        # the rounded value let a state's median county count as strictly above its own median (Delaware: Kent,
+        # 6.497529% against a cutoff shown as 6.4975).
+        resolved.append({**c, "label": metrics_info[m]["label"], "units": metrics_info[m]["units"], "source": metrics_info[m].get("source"), "cutoff": None if cutoff is None else round(cutoff, 4), "_cutoff": cutoff, "rule": rule, "state_median": round(median(values), 4), "n_with_data": len(values), "_values": values})
 
     def meets(value, c) -> bool | None:
         if value is None:
             return None
         if c["threshold"]["type"] == "none":
             return True
+        cut = c["_cutoff"]
         if c["threshold"]["type"] == "state_median":
-            return value > c["cutoff"] if c["direction"] == "high" else value < c["cutoff"]
-        return value >= c["cutoff"] if c["direction"] == "high" else value <= c["cutoff"]
+            return value > cut if c["direction"] == "high" else value < cut
+        return value >= cut if c["direction"] == "high" else value <= cut
 
     # Score every county.
     scored, missing = [], []
@@ -264,6 +268,7 @@ def rank_counties(
 
     for c in resolved:
         c.pop("_values")
+        c.pop("_cutoff")
     return {
         "state": state_label,
         "n_counties_in_state": len(rows),
@@ -370,7 +375,9 @@ def compare_groups(group_a: list[dict], group_b: list[dict], metrics: list[str],
         unit_word = " percentage points" if u == "percent" else ""
         sentence = (
             f"{info['label']}: median {fmt(med_a, u)} in {label_a} (n={len(a)}) vs {fmt(med_b, u)} in {label_b} (n={len(b)}), "
-            f"a difference of {diff:+.2f}{unit_word}; the 95% bootstrap interval {lo:+.2f} to {hi:+.2f} "
+            # "county-resampling" says in the sentence itself what the interval covers: which counties are in each
+            # group, not the error inside each county's published estimate (see `interpretation`).
+            f"a difference of {diff:+.2f}{unit_word}; the 95% county-resampling interval {lo:+.2f} to {hi:+.2f} "
             f"{'excludes zero, so the gap is unlikely to be chance' if excludes_zero else 'includes zero, so the gap could be chance'}."
         )
         if dropped:

@@ -83,6 +83,14 @@ def _query(sql: str, params: list | None = None) -> tuple[list[str], list[tuple]
 # --- Resolving what the user / model named ---
 
 
+def _switch_state(state: dict, abbr: str, full: str) -> None:
+    """Make abbr the session's state. Results from another state are dropped, so the side panel never shows
+    them under this state's name."""
+    if state["state_abbr"] and state["state_abbr"] != abbr:
+        state["last_ranking"] = state["last_comparison"] = state["last_places"] = None
+    state["state_abbr"], state["state_name"] = abbr, full
+
+
 def resolve_state(value, state: dict) -> tuple[str, str]:
     """'NY' / 'new york' / None (reuse the session's state) -> ('NY', 'New York')."""
     if value is None or str(value).strip() == "":
@@ -350,8 +358,13 @@ def rank_counties(state: dict, criteria: list, state_name: str | None = None, ex
         result["warnings"].append(CT_NOTE)
 
     # Remember the facts the user established, for follow-ups.
-    state["state_abbr"], state["state_name"] = abbr, full
-    state["selected_fips"] = [s["fips"] for s in result["selected"]]
+    new_selection = [s["fips"] for s in result["selected"]]
+    if new_selection != state["selected_fips"] or abbr != state.get("selected_state"):
+        # The comparison and the CDC check were about the old selection; drop them so the side panel cannot show
+        # them next to the new one.
+        state["last_comparison"] = state["last_places"] = None
+    _switch_state(state, abbr, full)
+    state["selected_fips"] = new_selection
     state["selected_names"] = [s["county_name"] for s in result["selected"]]
     state["selected_state"] = abbr
     state["excluded_fips"] = exclude_fips
@@ -384,7 +397,7 @@ def profile_counties(state: dict, counties: list, metrics: list, state_name: str
         result["warnings"].append("Some requested metrics were left out; see excluded_metrics for why and what to use instead.")
     if abbr == "CT":
         result["warnings"].append(CT_NOTE)
-    state["state_abbr"], state["state_name"] = abbr, full
+    _switch_state(state, abbr, full)
     result["session_note"] = "The session's selected counties are unchanged: this is a lookup, not a ranking."
     return json.dumps(result, default=str)
 
@@ -445,7 +458,7 @@ def compare_groups(state: dict, metrics: list, group_a=None, group_b="rest_of_st
         result["warnings"].append(f"Could not match '{name}' to a county in {full}; it was left out of its group.")
     if abbr == "CT":
         result["warnings"].append(CT_NOTE)
-    state["state_abbr"], state["state_name"] = abbr, full
+    _switch_state(state, abbr, full)
     state["last_comparison"] = result
     return json.dumps(result, default=str)
 
@@ -578,7 +591,8 @@ def fetch_cdc_places(state: dict, measures: list | None = None, fips: list | Non
     result |= {
         "note": "These are CDC model-based survey estimates for a later year than the Atlas/Rankings tables. They are a cross-check and do NOT replace the local values used in rankings; the session's selected counties are unchanged.",
     }
-    state["last_places"] = {k: result[k] for k in ("data_year", "measures", "counties", "state_benchmark")}
+    # The state goes with the result so the side panel can label the card, even when the session's state differs.
+    state["last_places"] = {k: result[k] for k in ("data_year", "measures", "counties", "state_benchmark")} | {"state": full}
     if abbr and not state["state_abbr"]:
         state["state_abbr"], state["state_name"] = abbr, full
     return json.dumps(result, default=str)
