@@ -124,6 +124,25 @@ EMPTY_REPLY_NUDGE = (
 )
 
 
+# The prompt says "no LaTeX", but the model still writes "BMI $\ge$ 30" now and then, and the interface renders
+# Markdown only. Code turns the handful of symbols it uses into plain characters before the checks run.
+_LATEX_SYMBOLS = {
+    "geq": "≥", "ge": "≥", "leq": "≤", "le": "≤", "neq": "≠", "ne": "≠", "times": "×", "approx": "≈",
+    "pm": "±", "cdot": "·", "sim": "~", "rightarrow": "→", "to": "→", "%": "%",
+}
+_LATEX_COMMAND = re.compile(r"\\(" + "|".join(sorted(map(re.escape, _LATEX_SYMBOLS), key=len, reverse=True)) + r")(?![A-Za-z])")
+_LATEX_WRAPPER = re.compile(r"\\(?:text|mathrm|mathbf|textbf)\{([^{}]*)\}")
+# A short $...$ span counts as math only if it holds a backslash command, so "$66,900" keeps its dollar sign.
+_LATEX_SPAN = re.compile(r"\$([^$\n]{0,40}?\\[^$\n]{0,40}?)\$")
+
+
+def plain_math(text: str) -> str:
+    """Replace inline LaTeX ("$\\ge$", "\\times", "\\text{..}") with plain characters; leave everything else alone."""
+    text = _LATEX_SPAN.sub(lambda m: m.group(1), text or "")
+    text = _LATEX_WRAPPER.sub(lambda m: m.group(1), text)
+    return _LATEX_COMMAND.sub(lambda m: _LATEX_SYMBOLS[m.group(1)], text)
+
+
 def extract_figures(text: str) -> set[float]:
     """Dollar and percent amounts in a text, normalised so "18.4%" and "18.37029" match."""
     out = set()
@@ -267,7 +286,8 @@ def run_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]:
         messages += [reply.model_dump()]
 
         if not reply.tool_calls:
-            text = reply.content or ""
+            text = plain_math(reply.content or "")
+            messages[-1]["content"] = text  # the history keeps what the user saw
             data_calls = [c for c in tool_calls if c["name"] in DATA_TOOLS]
             # A data tool that returned {"error": ...} produced no data; only successful calls count.
             used_data_tool = any(not c["result"].startswith('{"error"') for c in data_calls)
