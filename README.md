@@ -31,7 +31,7 @@ The [three sample queries](#three-sample-queries) below list the exact expected 
 - [Data: where it comes from and how it is loaded](#data-where-it-comes-from-and-how-it-is-loaded)
 - [Tools](#tools)
 - [Three sample queries](#three-sample-queries)
-- [Two questions a plain `run_sql` agent could not answer](#two-questions-a-plain-run_sql-agent-could-not-answer)
+- [Two questions a plain `run_sql` agent got wrong](#two-questions-a-plain-run_sql-agent-got-wrong)
 - [What I observed while testing](#what-i-observed-while-testing)
 - [Interface and agent architecture](#interface-and-agent-architecture)
 - [Scope and limitations](#scope-and-limitations)
@@ -156,35 +156,72 @@ Numbers are computed by code, not by the model. The prompt forbids mental arithm
 
 ## Three sample queries
 
-Each was run against the deployed code in a fresh session; expected numbers are from the tool results and were checked directly in DuckDB.
+For each query: the answer I expect and the table it comes from, then this agent's answer next to the same model's answer with no tools and no system prompt.
+
+- **Expected** numbers come from the tool results and were checked directly in DuckDB (`data/food_health.duckdb`, built from the two spreadsheets in `data/`).
+- **This agent** was recorded on 2026-11-18 with the deployed code (`vertex_ai/gemini-3.8-flash`, low thinking effort), each query in a fresh session.
+- **Same model, no tools** is `uv run compare.py --mode notools "<question>"`: the same model and settings, the question sent bare. Recorded the same day.
 
 ### 1. Ranking
 
 > "In New York State, which counties combine limited access to healthy food with adult diabetes above the state median? Show the top 5 and the thresholds you used."
 
-- **Tool:** `rank_counties` with two state-median criteria.
-- **Thresholds:** low-income & low-access population above the NY county median of **3.87%** (`food_access.pct_laccess_lowi19`, Atlas 2019; County Health Rankings carries the same value as `pct_limited_access_to_healthy_foods`), and adult diabetes above **8.5%** (`health_rankings.pct_adults_with_diabetes`, CHR 2023 / BRFSS 2020).
-- **Result:** **11 counties qualify**. Top 5 by mean percentile: Montgomery (18.4%, 9.8%), Franklin (7.6%, 10.0%), St. Lawrence (7.3%, 9.2%), Orange (6.0%, 9.3%), Chemung (6.2%, 9.0%).
+**Expected.** `rank_counties` with two state-median criteria:
+
+- low-income & low-access population above the NY county median of **3.87%**: table `food_access`, column `pct_laccess_lowi19` (USDA Food Environment Atlas, 2019; County Health Rankings carries the same value as `health_rankings.pct_limited_access_to_healthy_foods`)
+- adult diabetes above the NY county median of **8.5%**: table `health_rankings`, column `pct_adults_with_diabetes` (County Health Rankings 2023, BRFSS 2020)
+- **11 counties qualify**; top 5 by mean percentile: Montgomery (18.4%, 9.8%), Franklin (7.6%, 10.0%), St. Lawrence (7.3%, 9.2%), Orange (6.0%, 9.3%), Chemung (6.2%, 9.0%)
+
+| | Low-access threshold | Diabetes threshold | Top 5 counties |
+|---|---|---|---|
+| **Expected** | 3.87% (state median) | 8.5% (state median) | Montgomery, Franklin, St. Lawrence, Orange, Chemung |
+| **This agent** | 3.87% | 8.5% | Montgomery, Franklin, St. Lawrence, Orange, Chemung (and says 11 qualify) |
+| **Same model, no tools** | "> 6.0%", plus food insecurity "> 11.0%" | "> 8.8%" | Bronx, Sullivan, Cattaraugus, Chautauqua, Niagara |
+
+- **This agent** (`read_mappings`, `rank_counties`): *"Montgomery, Franklin, St. Lawrence, Orange, and Chemung show the highest co-occurrence of limited food access and adult diabetes above New York state medians, led by Montgomery where 18.4% of residents face low income and low food access—4.7 times the median."*
+- **No tools:** invented thresholds and redefined "limited access" as food insecurity. Of its five counties only Chautauqua meets both criteria in the tables, and it ranks 7th of the 11 that do.
 
 ### 2. Comparison with uncertainty
 
 > "In Texas, which 5 counties have the highest share of households with no car and more than 1 mile from a store? Compare them to the rest of Texas on poverty rate and food insecurity."
 
-- **Ranking:** `rank_counties` on `food_access.pct_laccess_hhnv19` (one criterion, `threshold: {type: "none"}`, `top_n: 5`) → Kent 10.1%, Cottle 9.2%, Zavala 8.6%, Kenedy 7.2%, Terrell 6.3%.
-- **Comparison:** `compare_groups` on `socioeconomic.povrate21` and `health_rankings.pct_food_insecure`:
+**Expected.**
+
+- `rank_counties` on table `food_access`, column `pct_laccess_hhnv19` (Atlas, 2019; one criterion, `threshold: {type: "none"}`, `top_n: 5`) → Kent 10.1%, Cottle 9.2%, Zavala 8.6%, Kenedy 7.2%, Terrell 6.3%
+- `compare_groups` on `socioeconomic.povrate21` (Atlas, 2021) and `health_rankings.pct_food_insecure` (County Health Rankings 2023, Map the Meal Gap 2020):
   - poverty median **17.4% vs 15.5%** (+1.9 pp, 95% interval [-3.8, 9.9])
   - food insecurity **14.1% vs 14.8%** (-0.7 pp, [-5.7, 8.0])
-- **What the answer says:** both intervals include zero, so the gaps could be chance.
-- The trace may show one more call after these two, `profile_counties` on the five counties, which the model uses to fill the per-county table (seen with both `gemini-3.8-flash` and `claude-haiku-5-5`); the numbers above do not change.
+- both intervals include zero, so the answer should say the gaps could be chance
+- the trace may show one more call, `profile_counties` on the five counties, which the model uses to fill the per-county table; the numbers do not change
+
+| | Top 5 counties | Poverty: top 5 vs rest | Food insecurity: top 5 vs rest | Verdict |
+|---|---|---|---|---|
+| **Expected** | Kent, Cottle, Zavala, Kenedy, Terrell | 17.4% vs 15.5% | 14.1% vs 14.8% | Both gaps could be chance |
+| **This agent** | Kent, Cottle, Zavala, Kenedy, Terrell | 17.4% vs 15.5%, +1.90 pp [-3.80, +9.90] | 14.1% vs 14.8%, -0.70 pp [-5.70, +8.00] | "cannot be distinguished from the rest of the state" |
+| **Same model, no tools** | Presidio, Zavala, Brooks, Hudspeth, Willacy | "~26.5%" vs "13.8% – 14.2%" | "~21.8%" vs "15.5% – 16.4%" | "roughly 1.5 to nearly 2.5 times higher" |
+
+- **This agent** (`read_mappings` ×2, `rank_counties`, `compare_groups`, `profile_counties`): *"Kent, Cottle, Zavala, Kenedy, and Terrell have the highest shares of households without a car and living far from a store in Texas, but as a group their poverty and food insecurity medians cannot be distinguished from the rest of the state."*
+- **No tools:** only Zavala is in both lists. It set aside Kenedy and Terrell, two of the actual top five, as counties whose "margins of error fluctuate wildly", and reported a large gap where the published data shows none that can be told apart from chance.
 
 ### 3. Aggregate with a metric the data lacks
 
 > "What are the median adult diabetes rate and median child food insecurity rate across Mississippi counties, and how many Mississippi counties have child food insecurity above 25%?"
 
-- **Tool:** `run_sql` over `health_rankings` joined to `counties` (`state_abbr = 'MS'`).
-- **Result:** median adult diabetes **13.0%** (County Health Rankings, age-adjusted, 2020), median food insecurity **17.9%**, **2 counties** above 25% (Holmes 27.6%, Humphreys 25.4%).
-- **What the answer says:** no county-level *child* food insecurity measure exists in these tables, and the figures are for the whole population.
-- Both `gemini-3.8-flash` and `claude-haiku-5-5` often also join `food_health` and report the Atlas 2019 crude diabetes median, **10.6%**, next to the 13.0%, labelled as a different version of the measure and not averaged.
+**Expected.** `run_sql` over table `health_rankings` joined to `counties` (`state_abbr = 'MS'`):
+
+- median adult diabetes **13.0%** (`pct_adults_with_diabetes`, County Health Rankings 2023, age-adjusted, 2020)
+- no county-level *child* food insecurity measure exists in these tables; the nearest is all-ages food insecurity (`pct_food_insecure`), median **17.9%**
+- **2 counties** above 25% on that measure: Holmes 27.6%, Humphreys 25.4%
+- the model often also reports the Atlas 2019 crude diabetes median (`food_health.pct_diabetes_adults19`), **10.6%**, labelled as a different version of the measure and not averaged
+
+| | Median adult diabetes | Median child food insecurity | Counties above 25% |
+|---|---|---|---|
+| **Expected** | 13.0% | Not in the data (all ages: 17.9%) | 2 (all ages) |
+| **This agent** | 13.0% (and 10.6% crude, 2019, labelled separately) | Says no county-level child measure exists; all ages 17.9% | 2: Holmes 27.6%, Humphreys 25.4% |
+| **Same model, no tools** | "~15.4%" | "~24.5%" | "38 of 82 counties" |
+
+- **This agent** (`read_mappings`, `run_sql` ×4): *"The database does not have a county-level child food insecurity measure; using the county-level all-ages measure, the county median food insecurity rate across Mississippi is 17.9%, the county median adult diabetes rate is 13.0% (County Health Rankings 2020), and exactly 2 counties have food insecurity above 25%."*
+- **No tools:** answered the child question as if the figures existed, citing sources it did not query; all three numbers are off.
 
 ### Follow-ups tested in the same session (the UI's suggestion chips)
 
@@ -195,26 +232,39 @@ All after query 1:
 - **"Redo the first ranking but leave out the five New York City boroughs."** → the same call with `exclude_counties`, and the result notes the boroughs still count toward the benchmark.
 - **"How many New York counties had zero supercenters in 2020, and what is their median poverty rate?"** → `run_sql` with `superc20 IS NULL`: **31 counties have fewer than three supercenters** (the count is suppressed, not zero), median poverty 13.3%.
 
-### The same model with no tools and no system prompt
+## Two questions a plain `run_sql` agent got wrong
 
-`uv run compare.py --mode notools "<question>"` sends the question to the configured model bare. The answers below were recorded with the deployed model, `vertex_ai/gemini-3.8-flash`, on 2026-11-18, one run per question:
+`uv run compare.py --mode baseline "<question>"` runs the same model with only `run_sql`, a one-paragraph prompt listing the table names, and none of the mappings, glossary, guards or analysis tools (its `run_sql` also runs without the state-level warning). It has the same budget as this agent, 10 tool rounds. The traces are verbatim from `compare.py` (results truncated); open each one to see it.
 
-1. **NY ranking:** a confident table with a "New York State county median" diabetes rate of **9.1%** and a limited-access median of **~3.2%**, listing Allegany, Sullivan, Cattaraugus, Delaware and Chautauqua with values such as "~10.2%" and "~9.8%". The published medians are 8.5% and 3.87%. Of the five named counties only Chautauqua meets both criteria in the tables, and it ranks 7th of the 11 that do; none of the five is in the actual top 5.
-2. **Texas no-car counties:** Brooks, Zavala, Presidio, Starr and "San Augustine (or Willacy)" with "~14%–16%", "~13%–15%" …, and a comparison table giving the five a poverty rate of "~27.9%" against "~13.8%" for Texas and food insecurity of "~23.1%" against "~15.5%", described as "more than double the state average". The Atlas ranks Kent, Cottle, Zavala, Kenedy and Terrell; only Zavala is in both lists, and its published value is 8.6%. For the actual five, the gaps in poverty and food insecurity cannot be told apart from chance (query 2 above).
-3. **Mississippi medians:** "approximately 15.2% – 15.5%" diabetes, "24.5% – 26.8%" child food insecurity, and "~38 to 43" or "~52 to 56" counties above 25% depending on the release, citing sources it did not query. The tables give 13.0%, 17.9% (all ages) and 2.
+I recorded the plain agent with two models:
 
-## Two questions a plain `run_sql` agent could not answer
+- **Gemini 2.5 Flash, 2026-11-05** (the deployed model at the time): it answered both questions, and both answers are wrong.
+- **Gemini 3.8 Flash, 2026-11-18** (deployed now, default thinking level): three runs per question, and all six ended with `(tool-call limit reached)` and no answer. It noticed the state-level columns but spent its ten rounds looking for a replacement it could not find (in one run of question B it was still looking up columns when the rounds ran out). I did not test whether a larger round budget would let it finish.
 
-`uv run compare.py --mode baseline "<question>"` runs the same model with only `run_sql`, a one-paragraph prompt listing the table names, and none of the mappings, glossary, guards or analysis tools (its `run_sql` also runs without the state-level warning). It has the same budget as this agent, 10 tool rounds. Everything in this section was recorded with the deployed model, `vertex_ai/gemini-3.8-flash`, on 2026-11-18. The traces are verbatim from `compare.py` (results truncated, schema lookups summarised); open each one to see it.
-
-I ran each question below three times in the plain setup. All nine runs ended the same way: the model used its ten rounds on finding out what the columns mean and returned `(tool-call limit reached)` with no answer. It did not fall into the traps. In eight of the nine runs it noticed that something was wrong with the column it had picked, then spent its remaining rounds looking for a replacement; in the ninth, a run of question B, it was still looking up columns when the rounds ran out. I did not test whether a larger round budget would let it finish.
+This agent's traces below are from Gemini 3.8 Flash at the default thinking level, before the switch to low; the tools it calls and the numbers it reports are the same at both levels.
 
 ### A. "Which 5 New York counties have the highest adult obesity rate, and what is each county's rate?"
 
-**Plain `run_sql`: no answer.** It worked out by query that `pct_obese_adults22` holds one value per state: 30.1% is New York State's rate repeated 62 times. That took five rounds, and the remaining rounds confirmed that no table in the database has a county-level obesity column. The plain agent has no way to reach one, so the question cannot be answered from where it stands.
+**Plain `run_sql`, Gemini 2.5 Flash: wrong.** It answered *"All New York counties have the same reported adult obesity rate of 30.1%. The top 5 counties by adult obesity rate are: Albany 30.1%, Schoharie 30.1%, Bronx 30.1% …"* `pct_obese_adults22` is a state-level column: 30.1% is New York State's rate repeated 62 times, and a "top 5" from it is meaningless.
 
 <details>
-<summary>Plain <code>run_sql</code> trace</summary>
+<summary>Plain <code>run_sql</code> trace, Gemini 2.5 Flash</summary>
+
+After discovering columns by `SELECT * … LIMIT 1`, it ran:
+
+```sql
+SELECT counties.county_name, food_health.pct_obese_adults22
+FROM counties JOIN food_health USING (fips)
+WHERE counties.state_abbr = 'NY' ORDER BY food_health.pct_obese_adults22 DESC LIMIT 5
+-- → Albany 30.1, Allegany 30.1, Bronx 30.1, Broome 30.1, Cattaraugus 30.1
+```
+
+</details>
+
+**Plain `run_sql`, Gemini 3.8 Flash: no answer.** It worked out by query that `pct_obese_adults22` holds one value per state, took five rounds to do so, then confirmed that no table has a county-level obesity column. The plain agent has no way to reach one.
+
+<details>
+<summary>Plain <code>run_sql</code> trace, Gemini 3.8 Flash</summary>
 
 Calls 1–3 searched `information_schema.columns` for obesity columns and found only the Atlas's two. Then:
 
@@ -240,7 +290,7 @@ Calls 6–8 and 10 were more schema lookups (one `DESCRIBE`, rejected as not a `
 
 </details>
 
-**This agent: answered in two calls.** `read_mappings` marks the column state-level and the glossary entry for *adult obesity* points to CDC PLACES, so it went straight to the external source. Its answer:
+**This agent: right, in two calls.** `read_mappings` marks the column state-level and the glossary entry for *adult obesity* points to CDC PLACES, so it went straight to the external source:
 
 > **The Food Environment Atlas cannot rank counties by adult obesity because its obesity measures are state-level, but CDC PLACES model-based estimates identify St. Lawrence County as having New York's highest adult obesity rate at 42.9%, followed by Franklin (40.8%), Lewis (40.7%), Niagara (39.4%), and Montgomery (38.9%).**
 
@@ -260,10 +310,28 @@ fetch_cdc_places({"scope": "whole_state", "state_name": "NY", "measures": ["OBES
 
 ### B. "In Texas, which 5 counties have the highest share of households with no car and more than 1 mile from a store? Compare them to the rest of Texas on poverty rate and food insecurity."
 
-**Plain `run_sql`: half the work, no answer.** By call 7 it had the right five counties and both food-insecurity columns side by side. Call 8 established that `foodinsec_21_23` is Texas's statewide rate on every row. It then ran out of rounds before computing the comparison with the rest of the state, which is the second half of the question.
+**Plain `run_sql`, Gemini 2.5 Flash: wrong.** It answered *"The average food insecurity rate for these 5 counties is 16.90%. For the rest of Texas counties, the average food insecurity rate is also 16.90%. This suggests that, on average, food insecurity is similar between these two groups."* `foodinsec_21_23` is Texas's statewide rate on every row, so the "comparison" compares a constant with itself. It also computed the 5-county poverty mean (17.46%) in its head.
 
 <details>
-<summary>Plain <code>run_sql</code> trace</summary>
+<summary>Plain <code>run_sql</code> trace, Gemini 2.5 Flash</summary>
+
+It found the right access column, then for food insecurity picked the Atlas table:
+
+```sql
+SELECT counties.county_name, food_access.pct_laccess_hhnv19, socioeconomic.povrate21, food_insecurity.foodinsec_21_23
+FROM counties JOIN food_access USING (fips) JOIN socioeconomic USING (fips) JOIN food_insecurity USING (fips)
+WHERE counties.state_abbr = 'TX' ORDER BY food_access.pct_laccess_hhnv19 DESC LIMIT 5
+-- → Kent 10.06, 11.5, 16.9 · Cottle 9.23, 18.8, 16.9 · Zavala 8.62, 25.4, 16.9 · …
+SELECT AVG(socioeconomic.povrate21), AVG(food_insecurity.foodinsec_21_23) FROM … WHERE state_abbr = 'TX' AND county_name NOT IN (…)
+-- → 15.80, 16.90
+```
+
+</details>
+
+**Plain `run_sql`, Gemini 3.8 Flash: half the work, no answer.** By call 7 it had the right five counties and both food-insecurity columns side by side. Call 8 established that `foodinsec_21_23` is Texas's statewide rate on every row. It then ran out of rounds before computing the comparison with the rest of the state, which is the second half of the question.
+
+<details>
+<summary>Plain <code>run_sql</code> trace, Gemini 3.8 Flash</summary>
 
 Calls 1–6 discovered columns (`DESCRIBE`, rejected; `SELECT * … LIMIT 1` on three tables; two `information_schema` searches). Then:
 
@@ -288,18 +356,16 @@ Answer: `(tool-call limit reached)`.
 
 </details>
 
-**This agent: answered in nine calls.** After six `read_mappings` lookups it used County Health Rankings' county measure, not the state-level Atlas column, and let the tools do the arithmetic. Its answer:
+**This agent: right, in nine calls.** The mappings told it which food-insecurity column is county-level, and the tools did the arithmetic:
 
 > **Kent, Cottle, Zavala, Kenedy, and Terrell have the highest shares of households with no car and low store access in Texas, led by Kent at 10.1% (4.7x the state median of 2.1%), but their differences in poverty and food insecurity compared to the rest of the state cannot be distinguished from chance.**
 
 followed by a per-county table and the comparison: poverty 17.4% vs 15.5% (+1.9 pp, [-3.8, 9.9]), food insecurity 14.1% vs 14.8% (-0.7 pp, [-5.7, 8.0]), both marked "Interval excludes zero? No".
 
-Nine calls is one short of the limit. What differs is where the rounds go: the mappings told it in one lookup which food-insecurity column is county-level, and `rank_counties` and `compare_groups` each did in one call what the plain agent would have needed several queries for.
-
 <details>
 <summary>This agent's trace</summary>
 
-The six `read_mappings` calls searched for the car, poverty and food-insecurity columns, then read the `food_access` table and the overview. Then:
+Six `read_mappings` calls searched for the car, poverty and food-insecurity columns, then read the `food_access` table and the overview. Then:
 
 ```
 rank_counties({"top_n": 5, "state_name": "Texas", "criteria": [{"direction": "high", "threshold": {"type": "none"}, "metric": "food_access.pct_laccess_hhnv19"}]})
@@ -312,17 +378,11 @@ profile_counties({"metrics": ["food_access.pct_laccess_hhnv19", "socioeconomic.p
 
 ### A third case: "zero" supercenters
 
-Asked how many New York counties had *zero* supercenters in 2020 and their median poverty rate, the plain agent ran `WHERE … fs.superc20 = 0`, got no rows, then counted the column over all counties (3,144 rows: 675 with a value, 0 zeros, 2,469 `NULL`) and hit the limit there. It had found that the blanks are `NULL`, but nothing in the database says that `NULL` means "fewer than three, suppressed". This agent reports "31 counties have fewer than three supercenters" and says why.
+Asked how many New York counties had *zero* supercenters in 2020 and their median poverty rate:
 
-### What the older model did with the same questions
-
-On 2026-11-05 the deployment used `vertex_ai/gemini-2.5-flash`, and the plain agent with that model did answer, wrongly:
-
-- For A it reported *"All New York counties have the same reported adult obesity rate of 30.1%"* and then listed a top 5 from the constant column.
-- For B it concluded that food insecurity was *"also 16.90%"* in both groups, comparing the statewide constant with itself.
-- For the supercenter question it answered that no New York county had zero supercenters.
-
-So across the two models the plain setup either gave a confident wrong answer or gave none; in neither case did it produce the answer this agent gives.
+- **Gemini 2.5 Flash, plain `run_sql`:** answered "no New York counties had zero supercenters in 2020", because `superc20 = 0` matches nothing; the suppressed counties are `NULL`.
+- **Gemini 3.8 Flash, plain `run_sql`:** ran `WHERE … fs.superc20 = 0`, got no rows, then counted the column over all counties (3,144 rows: 675 with a value, 0 zeros, 2,469 `NULL`) and hit the limit there. It found that the blanks are `NULL`, but nothing in the database says that `NULL` means "fewer than three, suppressed".
+- **This agent:** "31 counties have fewer than three supercenters", with the reason.
 
 ## What I observed while testing
 
@@ -339,7 +399,7 @@ I then added `profile_counties`, which computes the comparison and writes the ex
 `app.py`: FastAPI + LiteLLM, built on the course starter's bounded tool loop.
 
 - **Loop:** at most 10 tool rounds per turn (`MAX_TOOL_ROUNDS`), temperature 0.2, short backoff on Vertex 429. The temperature is not sent to the Claude API, where `claude-haiku-5-5` accepts only its default.
-- **Thinking effort:** Gemini runs with `reasoning_effort="low"`. At the model's default level, most of a turn's time went into thinking: the final answer to sample query 2 was about 2,300 output tokens (about 1,400 of them thinking) and the turn took 31 s. At `low` it was about 770 tokens and 13–19 s, with the same tool calls and the same figures on all three sample queries, the four follow-ups and the "can't answer" questions. When Vertex is slow, time grows with output tokens, so this keeps turns inside the deadline. The comparison answers in this README (no tools, plain `run_sql`) were recorded at the default level.
+- **Thinking effort:** Gemini runs with `reasoning_effort="low"`. At the model's default level, most of a turn's time went into thinking: the final answer to sample query 2 was about 2,300 output tokens (about 1,400 of them thinking) and the turn took 31 s. At `low` it was about 770 tokens and 13–19 s, with the same tool calls and the same figures on all three sample queries, the four follow-ups and the "can't answer" questions. When Vertex is slow, time grows with output tokens, so this keeps turns inside the deadline. The sample-query answers and the no-tools answers in this README were recorded at `low`; the plain `run_sql` comparison was recorded at the default level, as that section says.
 - **Model,** chosen with `MODEL` through LiteLLM:
   - Vertex AI `vertex_ai/gemini-3.8-flash`: the default and what is deployed. A GCP project created after the 2.5 models were closed to new projects gets 404 for `gemini-2.5-flash`.
   - Claude API `anthropic/claude-haiku-5-5`.
