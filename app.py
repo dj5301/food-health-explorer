@@ -27,6 +27,12 @@ VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
 MAX_TOOL_ROUNDS = 10  # a Text2SQL turn is mappings -> enum values -> one or two queries -> analysis
 TEMPERATURE = 0.2  # low: consistent tool use and format, not creative prose
 RATE_LIMIT_RETRIES = 3
+# Cloud Run cuts a request at 300 s and the course grades each question within 5 minutes. A turn that runs out of
+# time must still return something, so the loop works to its own deadline, well inside both limits.
+TURN_DEADLINE_S = float(os.environ.get("TURN_DEADLINE_S", 240))
+MODEL_CALL_TIMEOUT_S = float(os.environ.get("MODEL_CALL_TIMEOUT_S", 90))  # one call; normal calls take 2-20 s
+MIN_CALL_BUDGET_S = 15  # do not start a model call with less time than this left
+RETRY_BUDGET_S = 60  # below this, a draft the harness would send back goes out as it is
 AGENT_NAME = "analyst"  # single-agent system; every tool call is attributed to it
 DATA_TOOLS = {"run_sql", "rank_counties", "compare_groups", "profile_counties", "fetch_cdc_places"}  # context lookups alone do not make an answer
 
@@ -163,19 +169,72 @@ def unsourced_commentary(reply: str, messages: list[dict]) -> list[str]:
 # --- The Harness ---
 
 
-def complete(messages: list[dict], tools=TOOLS):
-    """One model call. Retries briefly on 429: a fresh GCP project has a small Gemini quota."""
+class TurnTimeout(Exception):
+    """The turn ran out of time before the model finished."""
+
+
+def complete(messages: list[dict], tools=TOOLS, deadline: float | None = None):
+    """One model call. Retries briefly on 429: a fresh GCP project has a small Gemini quota.
+
+    With a deadline (a time.monotonic() value), the call is cut off when the deadline passes, and also
+    after MODEL_CALL_TIMEOUT_S: on 2026-11-18 Vertex calls that normally take a few seconds took 50-75 s for
+    several minutes, and the Texas sample question hit Cloud Run's 300 s limit twice with no answer at all.
+    """
     kwargs = {"vertex_location": VERTEX_LOCATION} if MODEL.startswith("vertex_ai/") else {}
     if not MODEL.startswith("anthropic/"):
         # claude-haiku-5-5 rejects any temperature but the default, so the Claude API runs without one.
         kwargs["temperature"] = TEMPERATURE
     for attempt in range(RATE_LIMIT_RETRIES + 1):
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left < MIN_CALL_BUDGET_S:
+                raise TurnTimeout()
+            kwargs["timeout"] = min(MODEL_CALL_TIMEOUT_S, left)
         try:
             return litellm.completion(model=MODEL, messages=messages, tools=tools or None, **kwargs).choices[0].message
+        except litellm.Timeout as e:
+            raise TurnTimeout() from e
         except litellm.RateLimitError:
             if attempt == RATE_LIMIT_RETRIES:
                 raise
             time.sleep(2 ** (attempt + 1))  # 2s, 4s, 8s
+
+
+def partial_answer(tool_calls: list[dict]) -> str:
+    """What to say when time runs out: the sentences the tools already wrote, in code, with no model in between."""
+    lines = []
+    for call in tool_calls:
+        try:
+            result = json.loads(call["result"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(result, dict) or "error" in result:
+            continue
+        found = []
+        if call["name"] == "rank_counties":
+            found = [s["reason"] for s in result.get("selected", []) if s.get("reason")]
+        elif call["name"] == "compare_groups":
+            found = [r["sentence"] for r in result.get("results", []) if r.get("sentence")]
+        elif call["name"] == "profile_counties":
+            found = [m["sentence"] for c in result.get("counties", []) for m in c.get("metrics", []) if m.get("sentence")]
+        elif call["name"] == "fetch_cdc_places":
+            found = [result["ranking_note"]] if result.get("ranking_note") else []
+            found += [s for s in result.get("summary", []) if isinstance(s, str)]
+        elif call["name"] == "run_sql" and result.get("columns"):
+            rows = result.get("rows", [])[:10]
+            table = ["| " + " | ".join(map(str, result["columns"])) + " |", "|" + " --- |" * len(result["columns"])]
+            table += ["| " + " | ".join("" if v is None else str(v) for v in row) + " |" for row in rows]
+            found = ["Query result" + (" (first 10 rows)" if len(result.get("rows", [])) > 10 else "") + ":\n\n" + "\n".join(table)]
+        found += [w for w in result.get("warnings", []) if isinstance(w, str)]
+        lines += found
+    head = "**The model took too long to write the answer, so this reply is cut short.**"
+    if not lines:
+        return head + "\n\nNo data had been computed yet. Please ask again; if it happens again, ask one step at a time."
+    body = "\n".join(f"- {line}" if "\n" not in line else f"\n{line}\n" for line in lines)
+    return (
+        head + " These are the results the tools had already computed, as they wrote them; nothing below was added "
+        "by the model. Ask again for the full answer.\n\n" + body
+    )
 
 
 def run_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]:
@@ -188,9 +247,20 @@ def run_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]:
     # At low temperature the model sometimes re-emits an earlier answer verbatim when the numbers look the same.
     previous_replies = {m["content"] for m in messages if m.get("role") == "assistant" and m.get("content")}
     user_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    deadline = time.monotonic() + TURN_DEADLINE_S
 
     for _ in range(MAX_TOOL_ROUNDS):
-        reply = complete(messages)
+        try:
+            reply = complete(messages, deadline=deadline)
+        except TurnTimeout:
+            print(f"harness: turn deadline reached after {len(tool_calls)} tool calls", flush=True)
+            for n in nudges:
+                if n in messages:
+                    messages.remove(n)
+            text = partial_answer(tool_calls)
+            # Close the turn in the history so the next question starts from a normal assistant reply.
+            messages += [{"role": "assistant", "content": text}]
+            return text, tool_calls
 
         # model_dump() keeps it a plain dict: the raw object carries provider-specific
         # fields that trip Pydantic when LiteLLM re-serializes it next round.
@@ -233,6 +303,13 @@ def run_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]:
                 problem = OPENING_NUDGE
                 print("harness: missing bold opening sentence", flush=True)
             # Retry once per kind of problem: fixing the figures sometimes drops the opening sentence.
+            # Near the deadline a retry would likely end in no answer at all, so the draft goes out instead;
+            # unbacked figures are still named below.
+            if problem and deadline - time.monotonic() < RETRY_BUDGET_S:
+                print("harness: skipping retry, too close to the turn deadline", flush=True)
+                if not text.strip():
+                    text = messages[-1]["content"] = partial_answer(tool_calls)
+                problem = None
             if problem and problem not in {n["content"] for n in nudges}:
                 messages.pop()  # drop the draft so it does not pollute the history
                 nudges.append({"role": "user", "content": problem})
